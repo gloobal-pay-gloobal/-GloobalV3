@@ -1,0 +1,35 @@
+// src/adapters/ledger/useTransactionActions.js
+import { useCallback as useCallback2 } from "react";
+function useTransactionActions() {
+  const core = useFinancialCore();
+  const { orchestrator, userAccounts } = core;
+  // THE single canonical transaction lifecycle. Send Money, Scan & Pay,
+  // and Pay a Business all call this one hook function — there is no
+  // separate ledger-posting path left anywhere in the UI layer. One
+  // call does risk-check + posting + provenance + complaint window +
+  // (if eligible) asset-seed grant, atomically, at the domain
+  // boundary — not spread across a synchronous post here and a
+  // fire-and-forget completion later.
+  const executeTransaction = useCallback2(
+    (args) => orchestrator.executeTransaction({ userAccounts, ...args }),
+    [orchestrator, userAccounts]
+  );
+  const settleEssentialsToBank = useCallback2((amount) => orchestrator.settleEssentialsToBank({ userAccounts, amount }), [orchestrator, userAccounts]);
+  const settleReferralToBank = useCallback2((amount) => orchestrator.settleReferralToBank({ userAccounts, amount }), [orchestrator, userAccounts]);
+  // My Essentials daily pool — a separate, standing subsidy the
+  // platform applies directly to the user's own bank balance, not a
+  // payment method and not part of any one purchase's own lifecycle.
+  // Currently called by Scan & Pay, once, before executeTransaction,
+  // so the subsidized amount is already real bank balance by the time
+  // the actual payment's own risk check runs.
+  const applyEssentialsPoolSubsidy = useCallback2(
+    (args) => orchestrator.applyEssentialsPoolSubsidy({ userAccounts, ...args }),
+    [orchestrator, userAccounts]
+  );
+  // NOTE: no addEssentialsGrant here, and no standalone checkAndDeduct/
+  // scanAndPay either. Asset seeds are created in exactly one place —
+  // inside executeTransaction(), on a real, first-time completion, and
+  // there is deliberately no direct UI passthrough that skips it.
+  return { executeTransaction, settleEssentialsToBank, settleReferralToBank, applyEssentialsPoolSubsidy };
+}
+

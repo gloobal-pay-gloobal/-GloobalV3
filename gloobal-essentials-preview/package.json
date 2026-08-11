@@ -1,0 +1,26 @@
+{
+  "name": "gloobal-access-preview",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "predev": "node ../build_app.mjs ..",
+    "dev": "vite",
+    "prebuild": "node ../build_app.mjs ..",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^3.4.19",
+    "vite": "^5.4.0",
+    "vite-plugin-pwa": "^0.20.5"
+  }
+}

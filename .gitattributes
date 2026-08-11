@@ -1,0 +1,10 @@
+# The repo is edited on Windows and built on Netlify's Linux runners.
+# Normalize to LF in the repository so the two never disagree about a
+# file's contents (and so diffs stay readable).
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.ico binary
+*.jpg binary
+*.webp binary

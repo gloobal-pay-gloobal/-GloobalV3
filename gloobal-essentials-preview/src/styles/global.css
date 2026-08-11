@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal, framework-free reset. The app's actual visual design lives in
+   its components as inline styles plus Tailwind utility classes, so this
+   file only normalizes the handful of browser defaults that would
+   otherwise fight with that: margins, box-sizing, tap highlight color,
+   font smoothing — plus the native-app gesture/scroll behavior below. */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  /* iOS/Android "safe area" (notches, status bar, gesture bar) as CSS
+     variables so any component can opt in without hardcoding device-
+     specific numbers. Resolves to 0 on devices without insets. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* No pull-to-refresh, no rubber-band/elastic overscroll, no glow —
+     the app handles its own scroll containers; the outer document should
+     never visibly bounce or refresh the way a browser tab does. */
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  /* No native double-tap-to-zoom gesture fighting the UI's own taps. */
+  touch-action: manipulation;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #F6F5FC;
+  color: #14122B;
+  /* No accidental text selection / iOS callout menu on taps and long-
+     presses — inputs and anything explicitly opted in below still work
+     normally. This is what makes taps feel like app buttons instead of
+     webpage text. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+#root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+button {
+  font-family: inherit;
+  touch-action: manipulation;
+}
+
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Hide scrollbars on the app's internal scroll containers without
+   disabling scrolling itself — matches the chrome-less look of a native
+   list/screen. Scoped to elements that opt in, not applied globally, so
+   it never silently changes a container's scroll behavior. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
