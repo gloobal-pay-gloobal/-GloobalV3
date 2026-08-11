@@ -25,3 +25,8 @@ financial-principles-tests/src/data/essentialsBaseline.js
 # Scratch
 _trash/
 *.log
+
+# Raw AI-session transcript kept for local reference only. Not project
+# documentation, and it embeds absolute Windows home-directory paths —
+# this repo is public, so it stays out of it. The file remains on disk.
+memory.txt
