@@ -206,3 +206,42 @@ node tools/scan-undeclared.mjs   # identifiers referenced but never declared
 node tools/probe-screens.mjs     # screens x 194 countries + edge cases
 node tools/probe-stages.mjs      # all 10 registration/login stages
 ```
+
+## Deployment
+
+The deployable artifact is `gloobal-essentials-preview/dist`. `netlify.toml`
+at the repo root carries the whole configuration, so a Netlify "Import from
+Git" picks the build settings up automatically — do not re-enter them in the
+dashboard, or the two definitions will drift.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Base directory | `gloobal-essentials-preview` | The app's `prebuild` runs `node ../build_app.mjs ..`, which reads `backend/` and `frontend/` from the repo root, so the root must be in the deploy context. |
+| Build command | `npm run build` | Regenerates `src/GloobalApp.jsx`, then `vite build`. |
+| Publish directory | `dist` (relative to base) | |
+| Node | 20 | |
+
+`src/GloobalApp.jsx` is generated and git-ignored — a clean clone has no copy
+of it, and `prebuild` recreates it. Verified: a fresh clone plus `npm ci` plus
+`npm run build` produces the same asset hashes as a local build.
+
+### Headers
+
+`netlify.toml` sets the security headers and a CSP whose allowlist is derived
+from the origins the bundle actually requests — `flagcdn.com` (flags),
+`logo.clearbit.com` (bank logos), `raw.githubusercontent.com` (the GlobeHero
+earth texture), Google Fonts, and `gloobal-pay.onrender.com` (the API).
+Adding an origin to the app means adding it here too, or the browser blocks
+it silently in production while dev keeps working.
+
+`'unsafe-inline'` in `style-src` is load-bearing: the screens style
+themselves with inline `style={{…}}` and embedded `<style>` blocks.
+`script-src` has no such escape.
+
+### PWA
+
+`vite-plugin-pwa` generates the manifest and an `autoUpdate` service worker
+that precaches the app shell, so a reload or an offline launch still boots.
+`sw.js` and `manifest.webmanifest` are served `max-age=0, must-revalidate` —
+a cached service worker pins every installed client to an old bundle with no
+in-app way out.
