@@ -36,7 +36,7 @@ import {
 
 
 // src/screens/Dashboard/Dashboard.jsx
-function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, profilePhoto, onChangeProfilePhoto, sendHistory, bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange }) {
+function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, profilePhoto, onChangeProfilePhoto, sendHistory, bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange, onGloobalIdChange }) {
   const [balanceVisible, setBalanceVisible] = useState14(false);
   const [showBalanceBiometric, setShowBalanceBiometric] = useState14(false);
   const [balanceBiometricScanning, setBalanceBiometricScanning] = useState14(false);
@@ -580,11 +580,22 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     const isBackedByAccount = shareRole !== "merchant" && myGloobalId && myGloobalId.length === 12;
     if (isBackedByAccount) {
       try {
-        await GloobalApi.changeSymbolId(previousId, newIdBuffer);
+        // The ID the backend knows this account by — not shareableGloobalId,
+        // which is a display value that can already carry a local override.
+        // Sending the display value would 404 the moment the two differ.
+        await GloobalApi.changeSymbolId(myGloobalId, newIdBuffer);
       } catch (err) {
         showToast2(err.message || "Couldn't update your Gloobal ID");
         return;
       }
+      // Told upward so the whole app follows the account to its new ID.
+      // Without this the change stopped at this component: App kept the old
+      // symbolId in state, in the saved session and in the biometric gate,
+      // so the next guarded action asked the backend about an ID that no
+      // longer existed (404), and a reload resolved the old ID to "No
+      // account found for this Gloobal ID" — the account became unreachable
+      // from the very screen that had just renamed it.
+      if (onGloobalIdChange) onGloobalIdChange(newIdBuffer);
     }
     const now = /* @__PURE__ */ new Date();
     setIdUpdateHistory((h) => [

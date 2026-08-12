@@ -38,9 +38,17 @@ function gloobalSessionReadRaw() {
 function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
   if (!user || !user.symbolId) return;
   const previous = gloobalSessionReadRaw();
+  // Only inherit from a session belonging to the SAME account. The flag
+  // says "this device has a passkey for this account", so carrying it
+  // across a change of account is simply wrong: account A enrolling and
+  // then account B signing in on the same phone left B claiming an
+  // enrolment it does not have, which strands B on a mandatory biometric
+  // screen (no skip is offered for an enrolled account) whenever the
+  // server check that would correct it is unreachable.
+  const sameAccount = Boolean(previous && previous.user && previous.user.symbolId === user.symbolId);
   // undefined keeps whatever was already stored, so a save on every render
   // can't wipe a flag the enrolment step just set.
-  const enrolled = biometricEnrolled === void 0 ? Boolean(previous && previous.biometricEnrolled) : Boolean(biometricEnrolled);
+  const enrolled = biometricEnrolled === void 0 ? Boolean(sameAccount && previous.biometricEnrolled) : Boolean(biometricEnrolled);
   try {
     window.localStorage.setItem(
       GLOOBAL_SESSION_KEY,
@@ -48,7 +56,10 @@ function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
         user,
         phoneNumber: phoneNumber || "",
         savedAt: Date.now(),
-        loggedInAt: (previous && previous.loggedInAt) || new Date().toISOString(),
+        // Same account-scoping as the flag below: a new account signing in
+        // on this device starts its own "logged in at", not the previous
+        // occupant's.
+        loggedInAt: (sameAccount && previous.loggedInAt) || new Date().toISOString(),
         biometricEnrolled: enrolled
       })
     );

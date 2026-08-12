@@ -80,11 +80,45 @@ function ProfileSetupScreen({ onBack, onSubmit, photo, onChangePhoto, docType, o
     { key: "license", label: "Driving Licence", Icon: Car2 },
     { key: "passport", label: "Passport", Icon: Globe2 }
   ];
+  // Downscaled before it is ever handed upward. A phone camera photo is
+  // 3-8 MB, and base64 inflates that by a third — well past the ~5 MB
+  // localStorage quota the profile is saved into. The write throws
+  // QuotaExceededError, which is swallowed, so the photo would appear to
+  // be accepted and then silently be gone on the next load; a near-quota
+  // write can also crowd out the saved session, which shares the same
+  // origin storage. Now that a photo is mandatory, that was the common
+  // case rather than an edge one.
+  //
+  // 512px on the long edge at JPEG 0.82 lands around 40-60 KB, which is
+  // far more than a 96px avatar needs. Anything that fails to decode
+  // falls back to the original data URL rather than losing the pick.
+  const PHOTO_MAX_EDGE = 512;
+  const downscalePhoto = (dataUrl) =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.82));
+        } catch (err) {
+          // Tainted canvas, no 2d context, or a browser that refuses the
+          // export — the original still works, it just costs more storage.
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
   const handleFile = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => onChangePhoto(reader.result);
+    reader.onload = async () => onChangePhoto(await downscalePhoto(reader.result));
     reader.readAsDataURL(file);
     e.target.value = "";
   };

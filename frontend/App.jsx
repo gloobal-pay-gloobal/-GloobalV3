@@ -224,7 +224,6 @@ function GloobalId() {
       setScanError("Couldn't verify it's you — payment cancelled.");
       return;
     }
-    setUsedQrCodes((prev) => new Set(prev).add(scanPendingPayment.rawCode));
     const amount = scanPendingPayment.amountCents / 100;
     const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
     if (amount > 0) {
@@ -268,8 +267,20 @@ function GloobalId() {
         reportSenderLocation(txnId);
       } else {
         setScanError(result.reason || "Payment failed \u2014 insufficient balance");
+        // A rejected payment must not be reported as a paid one. This
+        // used to set scanError and then fall straight through to the
+        // lines below, which close the very screen scanError is rendered
+        // on and announce "Paid ..." — so a failed payment looked like a
+        // successful one and its reason was destroyed on the same tick.
+        // The screen now stays open with the reason on it.
+        return;
       }
     }
+    // Only now is the code spent: once a payment was actually posted,
+    // or — for a zero-amount scan — once the identity was confirmed.
+    // Marking it used before the risk check burned the QR on a payment
+    // that never happened and left no way to retry it.
+    setUsedQrCodes((prev) => new Set(prev).add(scanPendingPayment.rawCode));
     setShowScanScreen(false);
     setScanPendingPayment(null);
     showToast(amount > 0 ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked` : "Gloobal ID verified and locked");
@@ -509,9 +520,14 @@ function GloobalId() {
   }, [stage]);
 
   // Login, ID mode: check the Gloobal ID the moment it is complete rather
-  // than waiting for submit, so the card can say whether this account
-  // exists before the PIN screen is ever reached. The IN button stays
-  // disabled until it does.
+  // than waiting for submit, so the card can show "Account found" before
+  // the PIN screen is ever reached.
+  //
+  // The IN button is deliberately NOT gated on this. An unclear answer —
+  // a cold Render start, a 5xx — is not evidence that the ID is wrong,
+  // and disabling the only way forward on one would lock somebody out of
+  // their own account over a slow network. handleSubmitSecureId re-checks
+  // and is the real gate; this is the early, advisory half.
   //
   // `cancelled` guards the usual out-of-order finish: someone who
   // backspaces and retypes has two lookups in flight, and the slower one
@@ -582,6 +598,14 @@ function GloobalId() {
     // attempt against the backend's 5-strike lockout for a mistake that
     // was never about the PIN.
     if (isLoginAttempt) {
+      // The background effect above already resolved this exact ID and it
+      // came back as a real account — no reason to spend a second
+      // GET /api/users/resolve (and a second 45s cold-start timeout) on
+      // the same question.
+      if (loginIdResolved && registeredUser && registeredUser.symbolId === secureId) {
+        flipTo("loginAuth");
+        return;
+      }
       setAuthBusy(true);
       setAuthError(null);
       try {
@@ -761,23 +785,46 @@ function GloobalId() {
     const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
     const enrolled = gloobalBiometricEnrolled();
     const result = enrolled ? await gloobalVerifyBiometric(symbolId) : await gloobalEnrolBiometric(symbolId);
-    setLoginBiometricScanning(false);
     if (result.ok) {
+      setLoginBiometricScanning(false);
       flipTo("dashboard");
       return;
     }
-    // A rejection sends the person back to the PIN for one more attempt,
-    // exactly as a wrong PIN would — the two checks are the same gate, so
-    // failing either lands in the same place rather than at a dead end.
-    if (result.notEnrolled) {
-      setBiometricNotice("Set up Face ID or fingerprint to finish signing in.");
+    // Failing the device check cannot be a dead end, and this is where it
+    // used to become one. The enrolment flag stored at login is the
+    // *account's* (the server answers "does this account have a passkey"),
+    // but the assertion is the *device's* — so signing in on a second
+    // phone reported "enrolled", ran a verify that can only fail because
+    // the credential lives on the first phone, and got a NotAllowedError
+    // rather than the 404 that would have offered enrolment. With no skip
+    // shown for an enrolled account, the dashboard was unreachable on that
+    // device, permanently. (Enrolling the second device is not an option
+    // either: /api/passkey/register/options 409s once the account has one.)
+    //
+    // requireBiometric gives the device one more try — a misread finger is
+    // the common case and deserves it — and then falls to the PIN, checked
+    // server-side by POST /api/pin/verify. That is the same credential the
+    // login one step ago was verified against, so this is still a real
+    // check rather than a way past the gate.
+    const verifiedByPin = await requireBiometric({
+      symbolId,
+      pinReason: "Confirm it's you with your PIN to finish signing in."
+    });
+    setLoginBiometricScanning(false);
+    if (verifiedByPin) {
+      flipTo("dashboard");
       return;
     }
-    setBiometricNotice(`${result.reason} Try again, or go back and re-enter your PIN.`);
+    setBiometricNotice(
+      result.notEnrolled
+        ? "Set up Face ID or fingerprint, or confirm with your PIN, to finish signing in."
+        : `${result.reason} Try again, or confirm with your PIN.`
+    );
   };
-  // Continue without biometrics. Only reachable when there is nothing
-  // enrolled to verify against — an account that HAS a passkey has to use
-  // it, which is what makes the gate mandatory rather than advisory.
+  // Continue without biometrics. Only offered when there is nothing
+  // enrolled to verify against — an account that HAS a passkey has to
+  // satisfy the gate above (device check, or the PIN behind it), which is
+  // what makes it mandatory rather than advisory.
   const handleSkipLoginBiometric = () => {
     if (gloobalBiometricEnrolled()) return;
     flipTo("dashboard");
@@ -803,7 +850,17 @@ function GloobalId() {
   // person's real name.
   const requestBackFromProfile = useBackClose(stage === "profile", () => flipTo("referral"));
   const requestBackFromPin = useBackClose(stage === "pin", () => flipTo("profile"));
-  const requestBackFromRegBiometric = useBackClose(stage === "biometric", handleSkipRegBiometric);
+  // Registration's biometric step is terminal: the account exists and its
+  // PIN is set, so there is nothing behind it to go back to — walking back
+  // to the PIN would re-run POST /api/register-symbol for an account that
+  // already exists.
+  //
+  // So Back does nothing here rather than being wired to the skip handler,
+  // which made both the hardware Back gesture and the on-screen chevron
+  // navigate *forward* into the dashboard — pressing Back signed you in.
+  // Moving on without biometrics is the explicit "Set this up later"
+  // button instead, which is a decision rather than a side effect.
+  const requestBackFromRegBiometric = useBackClose(stage === "biometric", () => {});
   const requestBackFromLoginAuth = useBackClose(stage === "loginAuth", () => {
     setLoginAuthPin("");
     flipTo("secureId");
@@ -951,6 +1008,23 @@ function GloobalId() {
     } finally {
       setOtpVerifying(false);
     }
+  };
+  // The account's Gloobal ID changed server-side (Dashboard → Update
+  // Gloobal ID → PATCH /api/profile/change-symbol-id succeeded). Every
+  // copy of the old one has to follow it in the same breath: React state,
+  // the persisted session, the local profile blob, and the biometric
+  // gate's idea of who it is checking. Any one left behind points the app
+  // at an ID the backend no longer has.
+  const handleGloobalIdChanged = (newSymbolId) => {
+    if (!newSymbolId) return;
+    const updatedUser = Object.assign({}, registeredUser || {}, { symbolId: newSymbolId });
+    setRegisteredUser(updatedUser);
+    setSecureId(newSymbolId);
+    GloobalApi.saveSession(updatedUser, phoneNumber);
+    gloobalSetBiometricSymbolId(newSymbolId);
+    // Re-keyed rather than moved: the name and photo are looked up by
+    // Gloobal ID, so under the old key they would simply stop being found.
+    persistLocalProfile(newSymbolId, documentedName.trim(), profilePhoto);
   };
   const handleStartOver = () => {
     // Explicit sign-out: drop the remembered identity too, or the mount
@@ -1624,7 +1698,10 @@ function GloobalId() {
     revealed={pinRevealed}
     onToggleReveal={() => setPinRevealed((v) => !v)}
   />}{stage === "biometric" && <BiometricVerifyScreen
-    onBack={requestBackFromRegBiometric}
+    // No back chevron: this step is terminal (see
+    // requestBackFromRegBiometric). A control that cannot go anywhere is
+    // worse than no control.
+    onBack={null}
     onVerify={handleRegBiometricVerify}
     scanning={regBiometricScanning}
     notice={biometricNotice}
@@ -1689,6 +1766,7 @@ function GloobalId() {
     onToggleEssentialsIHaveEnough={handleToggleEssentialsIHaveEnough}
     onShareRoleChange={setActiveShareRole}
     onMyShareRateChange={setActiveMyShareRate}
+    onGloobalIdChange={handleGloobalIdChanged}
   />}{
     /* Scan to pay — real decode/lock logic, simulated camera input
        since there's no actual camera access here. Tapping the demo

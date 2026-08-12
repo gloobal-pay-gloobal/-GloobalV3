@@ -517,7 +517,11 @@ function BiometricVerifyScreen({ onBack, onVerify, scanning, notice, onSkip, ski
       flexDirection: "column",
       fontFamily: T.fontBody
     }}
-  ><button
+  >{
+    /* Rendered only when there is somewhere to go. Registration's
+       biometric step is terminal — the account and its PIN already
+       exist — and passes no onBack, so no chevron is drawn there. */
+  }{onBack && <button
     onClick={onBack}
     aria-label="Back"
     className="v2-tap"
@@ -538,7 +542,7 @@ function BiometricVerifyScreen({ onBack, onVerify, scanning, notice, onSkip, ski
       boxShadow: T.shadowCard,
       zIndex: 25
     }}
-  ><ChevronLeft size={20} /></button><div
+  ><ChevronLeft size={20} /></button>}<div
     style={{
       flex: 1,
       minHeight: 0,
@@ -703,6 +707,14 @@ function BiometricPinFallbackModal({ open, symbolId, reason, onResolve }) {
     setError(null);
     setChecking(false);
   }, [open]);
+  // Registered with the shared back stack like every other full-screen
+  // overlay in the app. Without it, Android's Back button popped the
+  // history entry belonging to whatever overlay sits underneath — firing
+  // *that* screen's close handler while this modal stayed mounted and its
+  // onResolve promise unresolved, wedging the action that opened it. Back
+  // now resolves the gate as "not verified", which is the honest answer
+  // for a dismissal.
+  const requestCancel = useBackClose(open, () => onResolve(false));
   if (!open) return null;
   const submit = async () => {
     if (pin.length !== PIN_LENGTH || checking) return;
@@ -737,7 +749,7 @@ function BiometricPinFallbackModal({ open, symbolId, reason, onResolve }) {
     aria-modal="true"
     aria-label="Confirm with your PIN"
   ><button
-    onClick={() => onResolve(false)}
+    onClick={requestCancel}
     aria-label="Cancel"
     className="v2-tap"
     style={{
@@ -810,6 +822,5 @@ function BiometricPinFallbackModal({ open, symbolId, reason, onResolve }) {
     minLength={PIN_LENGTH}
     maxLength={PIN_LENGTH}
     onSubmit={submit}
-    processing={checking}
   /></div></div>;
 }

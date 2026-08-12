@@ -242,22 +242,27 @@ async function gloobalBiometricEnrolledRemote(symbolId) {
 //
 // Order of resolution:
 //   1. No WebAuthn / no platform authenticator on this device at all →
-//      true. There is nothing to check, and the caller's own PIN step
-//      already stands in for it. Blocking here would lock people out of
-//      their own money on a desktop browser.
+//      straight to the PIN (3). This must NOT pass on its own: most of
+//      the actions behind this gate — revealing the balance, changing My
+//      Share, changing the Gloobal ID, settling to bank — have no PIN
+//      step of their own, so this gate is the entire check. Returning
+//      true here, as an earlier version did, meant a desktop browser
+//      without Windows Hello or Touch ID (and any non-secure context,
+//      since that also reports no authenticator) sailed through every one
+//      of them unverified.
 //   2. A passkey is enrolled → run the real device check. Success is
-//      true; an explicit rejection falls through to (4).
-//   3. Nothing enrolled → fall through to (4) rather than silently
-//      passing. The action still has to be authorised by something.
-//   4. PIN fallback: if the caller supplied onPinFallback, await it. It
-//      resolves true only once POST /api/pin/verify has confirmed the PIN
-//      server-side. No fallback supplied → false.
+//      true; an explicit rejection falls through to (3).
+//   3. PIN fallback: the modal registered by the app root, which resolves
+//      true only once POST /api/pin/verify has confirmed the PIN
+//      server-side. This is a real check, not a bypass — and it is what
+//      keeps a device with no sensor, or a person who chose "set this up
+//      later", able to use their own account.
 async function requireBiometric(options) {
   const opts = options || {};
   const symbolId = opts.symbolId || gloobalActiveSymbolId();
 
-  // (1) Unsupported device — PIN alone is the whole check here.
-  if (!(await gloobalPlatformAuthenticatorAvailable())) return true;
+  // (1) Nothing to prompt with on this device — the PIN is the check.
+  if (!(await gloobalPlatformAuthenticatorAvailable())) return gloobalRunPinFallback(opts);
 
   // (2) Enrolled — the real thing.
   if (!symbolId) return gloobalRunPinFallback(opts);
@@ -299,12 +304,24 @@ function gloobalRegisterPinFallbackHost(host) {
 // passkey — anyone who chose "set this up later" at registration — would
 // fail every gate in the app and be locked out of their own balance. The
 // PIN is what stands in.
+//
+// One at a time. The host holds a single pending request, so a second
+// concurrent call would overwrite the first and leave its promise
+// unresolved forever — the screen that opened it would sit in its
+// "verifying" state with no way out. Refusing the second call fails that
+// action safely instead of hanging it.
+var gloobalPinFallbackPending = false;
+
 async function gloobalRunPinFallback(opts) {
   const host = typeof opts.onPinFallback === "function" ? opts.onPinFallback : gloobalPinFallbackHost;
   if (typeof host !== "function") return false;
+  if (gloobalPinFallbackPending) return false;
+  gloobalPinFallbackPending = true;
   try {
     return (await host(opts)) === true;
   } catch (e) {
     return false;
+  } finally {
+    gloobalPinFallbackPending = false;
   }
 }
