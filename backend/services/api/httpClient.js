@@ -19,12 +19,36 @@
 // no token store and no `credentials: "include"` here. Don't add either
 // without a matching backend change.
 
-var GLOOBAL_API_DEFAULT_TIMEOUT_MS = 15e3;
+// Every call gets the cold-start allowance, not just the ones that happen
+// to run during sign-in.
+//
+// This was 15 seconds, against a backend that sleeps when idle and takes
+// 20-50s to wake (see below). The split was made on the theory that only
+// registration and login could be "the first call of a session", so those
+// were given 45s and everything else kept 15s. That theory does not hold:
+// the app can sit on the dashboard for fifteen minutes, Render puts the
+// backend to sleep, and then whatever the person taps next IS the first
+// call — verifying a PIN, sending a payment, loading a balance. Those all
+// aborted at 15s while the server was still booting, and surfaced as
+// "couldn't reach the server" on a backend that was fine.
+//
+// There is no call where failing at 15s beats waiting: a timeout is a
+// failure either way, and giving up on a server that is merely starting is
+// strictly worse. Payments are the sharpest case — POST
+// /api/transactions/send carries an idempotencyKey and the backend runs
+// its own 15-second identical-resend guard, so waiting is safe while
+// timing out early risks a retry the person did not intend.
+var GLOOBAL_API_DEFAULT_TIMEOUT_MS = 45e3;
 
 // Render's free tier spins the backend down when idle and takes 20-50s to
-// wake up — measured at ~23s on a cold hit. Any call that might be the
-// first of a session uses this instead of the default, or the wake-up
-// itself reads as "the app is broken".
+// wake up — measured at ~23s on a cold hit. That is the number the
+// default above is sized against.
+//
+// Kept as its own name, and deliberately equal to the default, because the
+// call sites that pass it explicitly are the ones documenting "this one is
+// very likely to be the first request after a sleep". If the default ever
+// drops again, those keep their allowance. Same value today: no call
+// should get less.
 var GLOOBAL_API_COLD_START_TIMEOUT_MS = 45e3;
 
 var GLOOBAL_API_FALLBACK_BASE = "https://gloobal-pay.onrender.com";
