@@ -284,7 +284,15 @@ function PinScreen({ value, length, onChange, onSubmit, onBack, revealed, onTogg
       justifyContent: "flex-start",
       gap: 24,
       padding: "72px 24px 40px",
+      // Vertical scroll only, and only when the dial pad genuinely does
+      // not fit. overflow-x is pinned to hidden rather than left at its
+      // `visible` default because CSS promotes a `visible` axis to
+      // `auto` whenever the other axis is not visible — which is what
+      // painted a horizontal scrollbar track (the dark line) under the
+      // PIN row. Every control on this card sits inside the card's own
+      // width, so clipping the x axis removes nothing.
       overflowY: "auto",
+      overflowX: "hidden",
       WebkitOverflowScrolling: "touch"
     }}
   ><div
@@ -394,7 +402,15 @@ function LoginAuthScreen({ value, length, onChange, onSubmit, onBack, revealed, 
       justifyContent: "flex-start",
       gap: 24,
       padding: "72px 24px 40px",
+      // Vertical scroll only, and only when the dial pad genuinely does
+      // not fit. overflow-x is pinned to hidden rather than left at its
+      // `visible` default because CSS promotes a `visible` axis to
+      // `auto` whenever the other axis is not visible — which is what
+      // painted a horizontal scrollbar track (the dark line) under the
+      // PIN row. Every control on this card sits inside the card's own
+      // width, so clipping the x axis removes nothing.
       overflowY: "auto",
+      overflowX: "hidden",
       WebkitOverflowScrolling: "touch"
     }}
   ><div
@@ -454,7 +470,17 @@ function LoginAuthScreen({ value, length, onChange, onSubmit, onBack, revealed, 
     }}
   ><MaskEyeIcon open={revealed} color={T.inkSoft} /></button><SymbolChipRow length={length} value={value} masked={!revealed} boxSize={34} justify="center" /></div><PhoneDialPad value={value} onChange={onChange} minLength={length} maxLength={length} onSubmit={onSubmit} /></div></div>;
 }
-function BiometricVerifyScreen({ onBack, onVerify, scanning }) {
+// `notice` carries whatever the real device check had to say — no sensor
+// on this device, a declined prompt, a timed-out one. It is shown on this
+// screen rather than through the root error banner because the next
+// action (try again, or skip) is here.
+//
+// `onSkip`, when given, renders a way past this screen. The caller decides
+// whether that is allowed: registration always offers it (the PIN is
+// already set, and biometrics can be added later), while a login against
+// an account that HAS a passkey passes no handler at all, which is what
+// makes the check mandatory there rather than advisory.
+function BiometricVerifyScreen({ onBack, onVerify, scanning, notice, onSkip, skipLabel }) {
   const CONTENT_TYPES = ["fingerprint", "face", "logo"];
   const COLOR_CYCLE = LOGO_FLIP_COLORS;
   const [step, setStep] = useState6(0);
@@ -609,13 +635,33 @@ function BiometricVerifyScreen({ onBack, onVerify, scanning }) {
       opacity: scanning ? 0.7 : 1
     }}
   >{scanning ? "Verifying\u2026" : "Verify"}</button>{
-    /* Fallback for anyone without Face ID or a fingerprint sensor —
-       their phone's own lock (PIN/pattern/passcode) stands in for
-       both. */
-  }<button
-    onClick={onVerify}
+    /* What the device actually said - no sensor on this device, a
+       declined prompt, a timed-out one. Shown on this screen rather
+       than through the root error banner because the next move (try
+       again, or skip) is right here.
+
+       This replaces a second button that used to sit below and called
+       the exact same onVerify as the one above it, so it did nothing
+       different. The platform prompt already falls back to the phone's
+       own passcode by itself when a face or finger is not recognised;
+       there was never a separate path for it to trigger. */
+  }{notice && <div
+    role="alert"
+    style={{
+      fontSize: 12,
+      fontWeight: 600,
+      lineHeight: 1.45,
+      color: T.inkSoft,
+      textAlign: "center",
+      padding: "10px 12px",
+      borderRadius: T.radiusMd,
+      background: T.surfaceAlt,
+      border: `1px solid ${T.line}`
+    }}
+  >{notice}</div>}{onSkip && <button
+    onClick={onSkip}
     disabled={scanning}
-    aria-label="Use my phone's lock instead"
+    aria-label={skipLabel || "Set this up later"}
     className="v2-tap"
     style={{
       width: "100%",
@@ -629,7 +675,141 @@ function BiometricVerifyScreen({ onBack, onVerify, scanning }) {
       cursor: scanning ? "default" : "pointer",
       opacity: scanning ? 0.6 : 1
     }}
+  >{skipLabel || "Set this up later"}</button>}</div></div></div>;
+}
+
+// The PIN fallback behind the biometric gate.
+//
+// Shown when a guarded action cannot be confirmed with a device biometric:
+// either nothing is enrolled yet, or the prompt was declined. It is not a
+// way around the gate — the PIN is checked against the backend by
+// POST /api/pin/verify, the same route the login flow uses, so a wrong PIN
+// fails the action exactly as a wrong fingerprint does.
+//
+// Deliberately not PayPinModal, which checks its input against a local
+// demo constant and never talks to the server.
+//
+// `onResolve(true|false)` is called exactly once per open — the caller is
+// a promise waiting on it (see gloobalRegisterPinFallbackHost), and
+// leaving it unresolved would hang whatever action opened this.
+function BiometricPinFallbackModal({ open, symbolId, reason, onResolve }) {
+  const [pin, setPin] = useState6("");
+  const [error, setError] = useState6(null);
+  const [checking, setChecking] = useState6(false);
+  const PIN_LENGTH = 6;
+  useEffect6(() => {
+    if (!open) return;
+    setPin("");
+    setError(null);
+    setChecking(false);
+  }, [open]);
+  if (!open) return null;
+  const submit = async () => {
+    if (pin.length !== PIN_LENGTH || checking) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await GloobalApi.verifyPin(symbolId, pin);
+      onResolve(true);
+    } catch (err) {
+      // A backend that never answered has judged nothing, so it must not
+      // be reported as a wrong PIN — the person retries rather than being
+      // told their own PIN is wrong.
+      setError(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+      setPin("");
+    } finally {
+      setChecking(false);
+    }
+  };
+  return <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      // Above BiometricVerifyScreen (600), which is usually what is on
+      // screen when this opens.
+      zIndex: 620,
+      background: T.bg,
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: T.fontBody
+    }}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Confirm with your PIN"
+  ><button
+    onClick={() => onResolve(false)}
+    aria-label="Cancel"
+    className="v2-tap"
+    style={{
+      position: "absolute",
+      top: "calc(18px + env(safe-area-inset-top, 0px))",
+      left: "calc(18px + env(safe-area-inset-left, 0px))",
+      width: 40,
+      height: 40,
+      borderRadius: "50%",
+      border: `1px solid ${T.line}`,
+      background: T.surface,
+      color: T.ink,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      boxShadow: T.shadowCard,
+      zIndex: 25
+    }}
+  ><ChevronLeft size={20} /></button><div
+    style={{
+      flex: 1,
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "flex-start",
+      gap: 18,
+      padding: "72px 24px 40px",
+      overflowY: "auto",
+      overflowX: "hidden",
+      WebkitOverflowScrolling: "touch"
+    }}
+  ><span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, textAlign: "center", lineHeight: 1.45, maxWidth: 300 }}>{reason || "Confirm it's you with your PIN."}</span><div
+    style={{
+      position: "relative",
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "22px 14px",
+      borderRadius: T.radiusLg,
+      boxShadow: T.shadowFloat,
+      border: `1px solid ${T.line}`,
+      background: T.surface,
+      boxSizing: "border-box",
+      overflow: "visible"
+    }}
+  ><span
+    style={{
+      position: "absolute",
+      top: -11,
+      left: 16,
+      background: T.surface,
+      border: `1px solid ${T.line}`,
+      borderRadius: 7,
+      padding: "3px 9px",
+      fontSize: 10,
+      fontWeight: 800,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+      color: T.accent,
+      boxShadow: T.shadowCard
+    }}
   >
-            Use phone lock
-          </button></div></div></div>;
+        PIN
+      </span><SymbolChipRow length={PIN_LENGTH} value={pin} masked boxSize={34} justify="center" /></div>{error && <div role="alert" style={{ fontSize: 12, fontWeight: 700, color: T.negative, textAlign: "center" }}>{error}</div>}<PhoneDialPad
+    value={pin}
+    onChange={setPin}
+    minLength={PIN_LENGTH}
+    maxLength={PIN_LENGTH}
+    onSubmit={submit}
+    processing={checking}
+  /></div></div>;
 }

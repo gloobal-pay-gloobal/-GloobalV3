@@ -17,6 +17,41 @@ import {
 // flip this to true to bring it back.
 var SHOW_PHONE_HERO_CIRCLE = false;
 
+// Where the profile picture lives. Locally, keyed by Gloobal ID, because
+// the backend has nowhere to put it: PUT /api/profile/:symbolId accepts
+// `fullName` and `email` and nothing else, and inventing a photo field
+// client-side would just be a body the server discards. The name is
+// stored alongside it purely so a restored session can show both without
+// waiting on a network round trip — the backend remains the authority on
+// the name itself.
+var GLOOBAL_PROFILE_KEY_PREFIX = "gloobal.profile.";
+
+// Every localStorage access is guarded: it throws outright in Safari
+// private mode and when storage is disabled, and a profile picture is
+// never worth crashing a registration over.
+function persistLocalProfile(symbolId, name, photo) {
+  if (!symbolId) return;
+  try {
+    window.localStorage.setItem(
+      GLOOBAL_PROFILE_KEY_PREFIX + symbolId,
+      JSON.stringify({ name: name || "", photo: photo || "", savedAt: Date.now() })
+    );
+  } catch (e) {
+    // No storage — the name still reached the backend at registration, and
+    // the photo falls back to the Gloobal mark on the next load.
+  }
+}
+
+function loadLocalProfile(symbolId) {
+  if (!symbolId) return null;
+  try {
+    const raw = window.localStorage.getItem(GLOOBAL_PROFILE_KEY_PREFIX + symbolId);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // src/App.jsx
 function GloobalId() {
   const stageRef = useRef13(null);
@@ -174,62 +209,70 @@ function GloobalId() {
   // success. The paid QR also becomes a normal history entry, so it's
   // reportable from the same Receipt/History UI Send Money already
   // uses — no new screens.
-  const handleScanBiometricVerify = () => {
+  //
+  // Same gate as Send Money, for the same reason: this path posts a real
+  // transaction. It was a 700ms setTimeout that always succeeded, so the
+  // biometric prompt here was decoration. A refusal now leaves the QR
+  // unspent and nothing posted.
+  const handleScanBiometricVerify = async () => {
     if (scanBiometricScanning || !scanPendingPayment) return;
     setScanBiometricScanning(true);
-    setTimeout(() => {
-      setScanBiometricScanning(false);
-      setShowScanBiometric(false);
-      setUsedQrCodes((prev) => new Set(prev).add(scanPendingPayment.rawCode));
-      const amount = scanPendingPayment.amountCents / 100;
-      const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
-      if (amount > 0) {
-        const txnId = genTxnId();
-        const now = /* @__PURE__ */ new Date();
-        // My Essentials daily pool applies here — before the real
-        // payment, as its own separate step (see
-        // TransactionOrchestrator#applyEssentialsPoolSubsidy). Not a
-        // payment method the person picks; it's a standing daily
-        // subsidy from the platform's own reserve that just makes
-        // part of this Scan & Pay already covered by the time the
-        // real risk check runs. Capped at today's baseline for this
-        // country; whatever's left resets tomorrow.
-        const dailyEssentialsLimit = computeEssentialsBaseline(dialCountry.iso).dailyTotal;
-        applyEssentialsPoolSubsidy({ requestedAmount: amount, dailyLimit: dailyEssentialsLimit, now });
-        const result = executeTransaction({
-          txnId,
-          amount,
-          payMethodLabel: scanPayMethod,
-          memo: "Scan & Pay",
+    const verified = await requireBiometric({ pinReason: "Confirm this payment with your PIN." });
+    setScanBiometricScanning(false);
+    setShowScanBiometric(false);
+    if (!verified) {
+      setScanError("Couldn't verify it's you — payment cancelled.");
+      return;
+    }
+    setUsedQrCodes((prev) => new Set(prev).add(scanPendingPayment.rawCode));
+    const amount = scanPendingPayment.amountCents / 100;
+    const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
+    if (amount > 0) {
+      const txnId = genTxnId();
+      const now = /* @__PURE__ */ new Date();
+      // My Essentials daily pool applies here — before the real
+      // payment, as its own separate step (see
+      // TransactionOrchestrator#applyEssentialsPoolSubsidy). Not a
+      // payment method the person picks; it's a standing daily
+      // subsidy from the platform's own reserve that just makes
+      // part of this Scan & Pay already covered by the time the
+      // real risk check runs. Capped at today's baseline for this
+      // country; whatever's left resets tomorrow.
+      const dailyEssentialsLimit = computeEssentialsBaseline(dialCountry.iso).dailyTotal;
+      applyEssentialsPoolSubsidy({ requestedAmount: amount, dailyLimit: dailyEssentialsLimit, now });
+      const result = executeTransaction({
+        txnId,
+        amount,
+        payMethodLabel: scanPayMethod,
+        memo: "Scan & Pay",
+        name: scanPendingPayment.gloobalId,
+        shareRatePercent: 0,
+        time: formatClockTime(now),
+        now,
+        clientRequestId: generateRequestId()
+      });
+      if (result.ok) {
+        const historyEntry = {
           name: scanPendingPayment.gloobalId,
-          shareRatePercent: 0,
+          date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          amount,
+          status: "completed",
+          method: scanPayMethod && scanPayMethod.includes("PayLater") ? "paylater" : "bank",
           time: formatClockTime(now),
-          now,
-          clientRequestId: generateRequestId()
-        });
-        if (result.ok) {
-          const historyEntry = {
-            name: scanPendingPayment.gloobalId,
-            date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-            amount,
-            status: "completed",
-            method: scanPayMethod && scanPayMethod.includes("PayLater") ? "paylater" : "bank",
-            time: formatClockTime(now),
-            txnId,
-            shareRate: 0,
-            ledgerRecordId: result.ledgerRecordId,
-            role: activeShareRole
-          };
-          setSendMoneyHistory((h) => [historyEntry, ...h]);
-          reportSenderLocation(txnId);
-        } else {
-          setScanError(result.reason || "Payment failed \u2014 insufficient balance");
-        }
+          txnId,
+          shareRate: 0,
+          ledgerRecordId: result.ledgerRecordId,
+          role: activeShareRole
+        };
+        setSendMoneyHistory((h) => [historyEntry, ...h]);
+        reportSenderLocation(txnId);
+      } else {
+        setScanError(result.reason || "Payment failed \u2014 insufficient balance");
       }
-      setShowScanScreen(false);
-      setScanPendingPayment(null);
-      showToast(amount > 0 ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked` : "Gloobal ID verified and locked");
-    }, 900);
+    }
+    setShowScanScreen(false);
+    setScanPendingPayment(null);
+    showToast(amount > 0 ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked` : "Gloobal ID verified and locked");
   };
   const [demoScanTarget] = useState19(() => {
     const demoId = genSuggestedId(12);
@@ -373,6 +416,22 @@ function GloobalId() {
   // What the backend returned for this account. The whole app keys off
   // registeredUser.symbolId once past registration.
   const [registeredUser, setRegisteredUser] = useState19(null);
+  // Set when /api/otp/send answers 409. Kept apart from authError because
+  // it is not a transient failure to retry — it is a dead end for
+  // registration, and the card renders it with a "Log in instead" action.
+  const [phoneAlreadyRegistered, setPhoneAlreadyRegistered] = useState19(false);
+  // Alternatives offered when the Gloobal ID someone picked is taken.
+  // Generated from the same genSuggestedId the Suggested-for-you row uses,
+  // so a tapped suggestion is always a well-formed 12-symbol ID.
+  const [takenIdSuggestions, setTakenIdSuggestions] = useState19([]);
+  // Login only: set once GET /api/users/resolve has confirmed the entered
+  // Gloobal ID belongs to somebody. Drives the "Account found" chip and is
+  // the gate on advancing to the PIN step.
+  const [loginIdResolved, setLoginIdResolved] = useState19(false);
+  // Registration only: the biometric step's own message, so a device with
+  // no sensor (or a declined prompt) explains itself on that screen rather
+  // than through the root error banner.
+  const [biometricNotice, setBiometricNotice] = useState19(null);
 
   // The backend normalises 10/11/12-digit forms server-side, but sending
   // the full international number means non-India dial codes survive
@@ -380,6 +439,33 @@ function GloobalId() {
   // (The login-side equivalent is built inside handleSubmitSecureId —
   // effectiveLoginCountry is declared further down this component.)
   const fullMobileNumber = `${dialCountry.dialCode || ""}${phoneNumber.replace(/\D/g, "")}`;
+
+  // The PIN fallback behind the biometric gate, hosted once at the root so
+  // every guarded action anywhere in the tree can reach it (see
+  // gloobalRegisterPinFallbackHost). Held as { reason, resolve }: `resolve`
+  // is the promise requireBiometric() is waiting on, and the modal is the
+  // only thing that settles it.
+  const [pinFallbackRequest, setPinFallbackRequest] = useState19(null);
+  useEffect15(() => {
+    gloobalRegisterPinFallbackHost(
+      (opts) =>
+        new Promise((resolve) => {
+          setPinFallbackRequest({
+            reason: (opts && opts.pinReason) || "Confirm it's you with your PIN.",
+            resolve
+          });
+        })
+    );
+    // Unregistering on unmount matters: a stale host would resolve into a
+    // component that no longer exists, hanging the caller forever.
+    return () => gloobalRegisterPinFallbackHost(null);
+  }, []);
+  // Resolved outside the state updater on purpose — an updater has to stay
+  // pure, and React calls it twice under StrictMode.
+  const resolvePinFallback = (verified) => {
+    if (pinFallbackRequest) pinFallbackRequest.resolve(verified);
+    setPinFallbackRequest(null);
+  };
 
   // Render's free tier sleeps when idle and takes 20-50s to wake. Firing
   // one throwaway request at mount means the backend is already booting
@@ -398,6 +484,20 @@ function GloobalId() {
     setRegisteredUser(restored.user);
     if (restored.user.symbolId) setSecureId(restored.user.symbolId);
     if (restored.phoneNumber) setPhoneNumber(restored.phoneNumber);
+    // The ID came from a session this device already authenticated once,
+    // so it needs no fresh resolve to be trusted as an existing account —
+    // it just skips straight to the PIN when submitted.
+    if (restored.user.symbolId) setLoginIdResolved(true);
+    // Name and photo come back with it, so a returning person sees their
+    // own account rather than a placeholder while the dashboard loads.
+    const storedProfile = loadLocalProfile(restored.user.symbolId);
+    if (storedProfile) {
+      if (storedProfile.name) setDocumentedName(storedProfile.name);
+      if (storedProfile.photo) setProfilePhoto(storedProfile.photo);
+    } else if (restored.user.fullName) {
+      setDocumentedName(restored.user.fullName);
+    }
+    gloobalSetBiometricSymbolId(restored.user.symbolId || null);
     setIsLoginAttempt(true);
     setStage("secureId");
   }, []);
@@ -407,6 +507,44 @@ function GloobalId() {
   useEffect15(() => {
     setAuthError(null);
   }, [stage]);
+
+  // Login, ID mode: check the Gloobal ID the moment it is complete rather
+  // than waiting for submit, so the card can say whether this account
+  // exists before the PIN screen is ever reached. The IN button stays
+  // disabled until it does.
+  //
+  // `cancelled` guards the usual out-of-order finish: someone who
+  // backspaces and retypes has two lookups in flight, and the slower one
+  // must not overwrite the newer answer.
+  useEffect15(() => {
+    if (!isLoginAttempt || loginEntryMode !== "id" || stage !== "secureId") return;
+    if (secureId.length !== SECURE_ID_LENGTH) {
+      setLoginIdResolved(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const user = await GloobalApi.resolveUser(secureId);
+        if (cancelled) return;
+        setRegisteredUser(user);
+        setLoginIdResolved(true);
+        setAuthError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setLoginIdResolved(false);
+        // Only a definite 404 is reported. A cold start or a 5xx is not an
+        // answer about this ID, and saying "no account found" over one
+        // would be telling somebody their own account does not exist.
+        if (err instanceof GloobalApiError && err.status === 404) {
+          setAuthError("No account found for this Gloobal ID.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [secureId, isLoginAttempt, loginEntryMode, stage]);
   const flipTo = (next) => {
     setFlipping(true);
     setTimeout(() => {
@@ -438,8 +576,29 @@ function GloobalId() {
       return;
     }
     if (secureId.length !== SECURE_ID_LENGTH || authBusy) return;
+    // Login by Gloobal ID: the ID has to resolve to a real account before
+    // the PIN step, not after. Sending an unknown ID into /api/login only
+    // produces a generic failure that reads as "wrong PIN", and burns an
+    // attempt against the backend's 5-strike lockout for a mistake that
+    // was never about the PIN.
     if (isLoginAttempt) {
-      flipTo("loginAuth");
+      setAuthBusy(true);
+      setAuthError(null);
+      try {
+        const user = await GloobalApi.resolveUser(secureId);
+        setRegisteredUser(user);
+        setLoginIdResolved(true);
+        flipTo("loginAuth");
+      } catch (err) {
+        setLoginIdResolved(false);
+        setAuthError(
+          err instanceof GloobalApiError && err.status === 404
+            ? "No account found for this Gloobal ID."
+            : err.message
+        );
+      } finally {
+        setAuthBusy(false);
+      }
       return;
     }
     // Registration: warn early if this ID is already somebody's. Only an
@@ -452,8 +611,12 @@ function GloobalId() {
       const { available } = await GloobalApi.checkSymbolAvailability(secureId);
       if (available === false) {
         setAuthError("That Gloobal ID is already taken. Try another.");
+        // Two ready-made alternatives, so "taken" comes with a way out
+        // instead of sending the person back to the dial to guess again.
+        setTakenIdSuggestions([genSuggestedId(SECURE_ID_LENGTH), genSuggestedId(SECURE_ID_LENGTH)]);
         return;
       }
+      setTakenIdSuggestions([]);
       flipTo("referral");
     } finally {
       setAuthBusy(false);
@@ -463,7 +626,7 @@ function GloobalId() {
   // registration at the PIN step. Skipping leaves it empty, which the
   // backend accepts.
   const handleSubmitReferral = () => {
-    if (referralCode.length === REFERRAL_LENGTH) flipTo("pin");
+    if (referralCode.length === REFERRAL_LENGTH) flipTo("profile");
   };
   // The account is actually created here — this is the one write that
   // matters. Two calls in order: register-symbol creates the User in
@@ -476,13 +639,34 @@ function GloobalId() {
     setAuthError(null);
     try {
       const result = await GloobalApi.register({
-        fullName: fullMobileNumber,
+        // The real name, collected at the profile step just before this
+        // one. It used to be the phone number: fullName was set to
+        // fullMobileNumber because the name had not been asked for yet at
+        // this point in the flow, so every account created here was stored
+        // with its own mobile number as its display name.
+        fullName: documentedName.trim(),
         mobileNumber: fullMobileNumber,
         symbolId: secureId,
         referredBy: referralCode || ""
       });
       setRegisteredUser(result.user);
-      await GloobalApi.setPin(result.user.symbolId || secureId, pin);
+      const newSymbolId = result.user.symbolId || secureId;
+      await GloobalApi.setPin(newSymbolId, pin);
+      // The photo has no home on the backend (PUT /api/profile takes
+      // fullName and email only), so it is written locally against the ID
+      // that now exists. Done here rather than at the profile step because
+      // that step runs before the account does.
+      persistLocalProfile(newSymbolId, documentedName.trim(), profilePhoto);
+      // The account is created with the right name already, so this only
+      // has to repair the case where the registration itself came back
+      // with something else (an existing account being re-claimed). It is
+      // never allowed to fail the registration.
+      if (result.user.fullName !== documentedName.trim()) {
+        GloobalApi.updateProfile(newSymbolId, { fullName: documentedName.trim() }).catch(() => {});
+      }
+      // The passkey has to be enrolled against an account that exists, so
+      // the gate is told who it is working for only now.
+      gloobalSetBiometricSymbolId(newSymbolId);
       // A bad referral code never fails the registration, so this is the
       // only place it can be reported.
       if (result.referralWarning) setAuthError(result.referralWarning);
@@ -493,20 +677,44 @@ function GloobalId() {
       setAuthBusy(false);
     }
   };
-  const handleRegBiometricVerify = () => {
+  // Registration's biometric step: a real WebAuthn enrolment, not a timed
+  // animation. On a phone this is the Face ID / Touch ID / fingerprint
+  // prompt, and what it leaves behind is a passkey the backend verified
+  // and stored — which is what every later gate checks against.
+  //
+  // Failure here never blocks the dashboard. Someone whose device has no
+  // sensor, or who declines the prompt, still has a working account
+  // protected by the PIN they just set; they are told it can be turned on
+  // later rather than being held at a screen they cannot pass.
+  const handleRegBiometricVerify = async () => {
     if (regBiometricScanning) return;
     setRegBiometricScanning(true);
-    setTimeout(() => {
-      setRegBiometricScanning(false);
-      flipTo("profile");
-    }, 700);
-  };
-  const handleSubmitProfile = () => {
-    if (!docType || !documentedName.trim()) return;
-    // Persist whose account this device just finished registering, so a
-    // refresh comes back to the lock screen instead of the phone screen.
-    if (registeredUser) GloobalApi.saveSession(registeredUser, phoneNumber);
+    setBiometricNotice(null);
+    const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
+    const result = await gloobalEnrolBiometric(symbolId);
+    setRegBiometricScanning(false);
+    if (registeredUser) GloobalApi.saveSession(registeredUser, phoneNumber, result.ok);
+    if (!result.ok) {
+      setBiometricNotice(`${result.reason} You can set this up later in Settings.`);
+      return;
+    }
     flipTo("dashboard");
+  };
+  // Skipping biometric setup. Kept explicit so declining is a decision the
+  // person makes rather than something they have to fail their way past.
+  const handleSkipRegBiometric = () => {
+    if (registeredUser) GloobalApi.saveSession(registeredUser, phoneNumber, false);
+    flipTo("dashboard");
+  };
+  // Name and photo, both mandatory, collected before the PIN so the
+  // account is created with a real name on it.
+  const handleSubmitProfile = () => {
+    if (!docType || documentedName.trim().length < 2 || profilePhoto === G_LOGO_DATA_URI) return;
+    // Written against the chosen Gloobal ID now and re-written against the
+    // confirmed one after registration — the backend can hand back a
+    // different symbolId, and this keeps the local copy findable either way.
+    persistLocalProfile(secureId, documentedName.trim(), profilePhoto);
+    flipTo("pin");
   };
   // POST /api/login — Secure ID + PIN, verified server-side against the
   // bcrypt hash. The backend locks the account for 10 minutes after 5 bad
@@ -520,7 +728,22 @@ function GloobalId() {
       const result = await GloobalApi.login(symbolId, loginAuthPin);
       setRegisteredUser(result.user);
       GloobalApi.saveSession(result.user, phoneNumber);
+      gloobalSetBiometricSymbolId(result.user.symbolId || symbolId);
       setLoginAuthPin("");
+      // Whatever the local session claims, the server knows whether this
+      // account actually has a passkey. Asked once, here, so the next
+      // screen already knows whether it is verifying or offering setup.
+      const hasPasskey = await gloobalBiometricEnrolledRemote(result.user.symbolId || symbolId);
+      if (hasPasskey !== null) GloobalApi.saveSession(result.user, phoneNumber, hasPasskey);
+      // A device with no sensor at all cannot be asked for one. The PIN
+      // just verified server-side is the whole check on that device, and
+      // holding it at a prompt it can never satisfy would lock the person
+      // out of their own account.
+      if (!(await gloobalPlatformAuthenticatorAvailable())) {
+        flipTo("dashboard");
+        return;
+      }
+      setBiometricNotice(null);
       flipTo("loginBiometric");
     } catch (err) {
       setAuthError(err.message);
@@ -528,13 +751,36 @@ function GloobalId() {
       setAuthBusy(false);
     }
   };
-  const handleLoginBiometricVerify = () => {
+  // Mandatory on every re-login, after the PIN. Enrolled accounts get a
+  // real WebAuthn assertion; accounts that have never enrolled get the
+  // offer here instead, so the second login is the last one without it.
+  const handleLoginBiometricVerify = async () => {
     if (loginBiometricScanning) return;
     setLoginBiometricScanning(true);
-    setTimeout(() => {
-      setLoginBiometricScanning(false);
+    setBiometricNotice(null);
+    const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
+    const enrolled = gloobalBiometricEnrolled();
+    const result = enrolled ? await gloobalVerifyBiometric(symbolId) : await gloobalEnrolBiometric(symbolId);
+    setLoginBiometricScanning(false);
+    if (result.ok) {
       flipTo("dashboard");
-    }, 700);
+      return;
+    }
+    // A rejection sends the person back to the PIN for one more attempt,
+    // exactly as a wrong PIN would — the two checks are the same gate, so
+    // failing either lands in the same place rather than at a dead end.
+    if (result.notEnrolled) {
+      setBiometricNotice("Set up Face ID or fingerprint to finish signing in.");
+      return;
+    }
+    setBiometricNotice(`${result.reason} Try again, or go back and re-enter your PIN.`);
+  };
+  // Continue without biometrics. Only reachable when there is nothing
+  // enrolled to verify against — an account that HAS a passkey has to use
+  // it, which is what makes the gate mandatory rather than advisory.
+  const handleSkipLoginBiometric = () => {
+    if (gloobalBiometricEnrolled()) return;
+    flipTo("dashboard");
   };
   const handleBackFromSecureId = () => {
     if (isLoginAttempt) {
@@ -550,9 +796,14 @@ function GloobalId() {
   };
   const requestBackFromSecureId = useBackClose(stage === "secureId", handleBackFromSecureId);
   const requestBackFromReferral = useBackClose(stage === "referral", () => flipTo("secureId"));
-  const requestBackFromPin = useBackClose(stage === "pin", () => flipTo("referral"));
-  const requestBackFromRegBiometric = useBackClose(stage === "biometric", () => flipTo("pin"));
-  const requestBackFromProfile = useBackClose(stage === "profile", () => flipTo("biometric"));
+  // Registration order is phone → OTP → Gloobal ID → referral → name and
+  // photo → PIN → biometric, so these three walk back along that same
+  // chain. The name/photo step moved ahead of the PIN so that the account
+  // POST /api/register-symbol creates at the PIN step already carries the
+  // person's real name.
+  const requestBackFromProfile = useBackClose(stage === "profile", () => flipTo("referral"));
+  const requestBackFromPin = useBackClose(stage === "pin", () => flipTo("profile"));
+  const requestBackFromRegBiometric = useBackClose(stage === "biometric", handleSkipRegBiometric);
   const requestBackFromLoginAuth = useBackClose(stage === "loginAuth", () => {
     setLoginAuthPin("");
     flipTo("secureId");
@@ -654,14 +905,36 @@ function GloobalId() {
     if (digits.length < minLen || digits.length > maxLen) return;
     setVerifying(true);
     setAuthError(null);
+    setPhoneAlreadyRegistered(false);
     try {
       await GloobalApi.sendOtp(fullMobileNumber, "registration");
       flipTo("otp");
     } catch (err) {
-      setAuthError(err.message);
+      // 409 — the backend found an account on this number and deliberately
+      // sent no OTP (see /api/otp/send). Registration cannot continue, so
+      // this is shown inline on the phone card with a way straight into
+      // login rather than as the generic error banner: the person's next
+      // move is obvious and should be one tap, not a re-read of the form.
+      if (err instanceof GloobalApiError && err.status === 409) {
+        setPhoneAlreadyRegistered(true);
+      } else {
+        setAuthError(err.message);
+      }
     } finally {
       setVerifying(false);
     }
+  };
+  // Switches the same phone number straight into the login flow. The
+  // number is kept — it is the one thing already known to be correct.
+  const handleSwitchToLogin = () => {
+    setPhoneAlreadyRegistered(false);
+    setAuthError(null);
+    setShowLoginFace(true);
+    setIsLoginAttempt(true);
+    setLoginEntryMode("mobile");
+    setLoginMobileBuffer(phoneNumber.replace(/\D/g, ""));
+    setLoginMobileCountry(dialCountry);
+    flipTo("secureId");
   };
   const [otpVerifying, setOtpVerifying] = useState19(false);
   // POST /api/otp/verify. On success the backend marks the OTP verified;
@@ -685,6 +958,18 @@ function GloobalId() {
     GloobalApi.clearSession();
     setRegisteredUser(null);
     setAuthError(null);
+    // Everything the previous identity left behind. The biometric gate in
+    // particular has to forget who it was working for, or the next
+    // person's first guarded action would be checked against the signed-
+    // out account's passkey.
+    gloobalSetBiometricSymbolId(null);
+    setPhoneAlreadyRegistered(false);
+    setTakenIdSuggestions([]);
+    setLoginIdResolved(false);
+    setBiometricNotice(null);
+    setDocumentedName("");
+    setDocType(null);
+    setProfilePhoto(G_LOGO_DATA_URI);
     setVerifying(false);
     setPhoneNumber("");
     setPhoneDialOpen(false);
@@ -823,16 +1108,42 @@ function GloobalId() {
       left: "50%",
       bottom: "6%",
       transform: "translateX(-50%)",
-      width: "92%",
-      maxWidth: 340,
+      // The card is still exactly 92% / 340px wide: the extra 48px here is
+      // padding, not card. See the overflow note below for why it exists.
+      width: "calc(92% + 48px)",
+      maxWidth: 340 + 48,
+      padding: "0 24px",
+      boxSizing: "border-box",
       zIndex: 20,
       display: "flex",
       flexDirection: "column",
       justifyContent: "flex-end",
+      // No horizontal scrollbar, ever — this is where the dark line under
+      // the symbol/digit row came from.
+      //
+      // This was `overflowY: "auto"` with overflow-x left at its `visible`
+      // default, which CSS does not allow: when one axis is not `visible`,
+      // the other computes to `auto`. So the column was silently
+      // horizontally scrollable — and the cards inside deliberately hang
+      // controls outside their own box, the flip-to-login /
+      // flip-to-mobile button most of all at `right: -18`. Those 18px gave
+      // the column a horizontal scroll range, and Chrome paints a scroll
+      // range as a track: the dark line, on exactly the REGISTRATION and
+      // LOGIN cards (the two with that button) and not on OTP, whose
+      // controls all sit inside the card's width.
+      //
+      // Pinning overflow-x to hidden on its own would clip 18px off that
+      // button. The 24px of horizontal padding above is what makes that
+      // safe: the overhang now falls inside the column's own padding box
+      // rather than past its edge, so there is no horizontal overflow left
+      // to scroll and nothing gets cut. Vertical scrolling is kept —
+      // the dial pad genuinely does not fit on a short screen, and
+      // dropping it there would strand the card off the top.
       overflowY: "auto",
+      overflowX: "hidden",
       WebkitOverflowScrolling: "touch"
     }}
-  ><div style={{ perspective: 800, position: "relative", flexShrink: 0 }}><div
+  ><div style={{ perspective: 800, position: "relative", flexShrink: 0, maxWidth: "100%" }}><div
     style={{
       position: "relative",
       width: "100%",
@@ -888,6 +1199,27 @@ function GloobalId() {
       flipTo("secureId");
     }}
   />}{
+    /* Number already has an account. Shown inside the card, under the
+       number it is about, rather than in the root error banner: this
+       is not a failure to retry, it is a fork in the flow, and the
+       way out of it is the tap directly below the message. */
+  }{stage === "phone" && phoneAlreadyRegistered && <div style={{ width: "100%", marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}><span role="alert" style={{ fontSize: 12, fontWeight: 700, color: T.negative, textAlign: "center", lineHeight: 1.4 }}>
+                  This number is already registered.
+                </span><button
+    onClick={handleSwitchToLogin}
+    className="v2-tap"
+    style={{
+      border: "none",
+      background: "none",
+      padding: "4px 6px",
+      color: T.accent,
+      fontSize: 12.5,
+      fontWeight: 800,
+      cursor: "pointer"
+    }}
+  >
+                  Log in instead →
+                </button></div>}{
     /* Flip to log in — on the card's own boundary now, not on
        the call button, same treatment as the Secure ID card's
        flip icon. Keeps a slow, continuous spin on its own (not
@@ -1162,7 +1494,55 @@ function GloobalId() {
     /* Two ready-made IDs — creation only, never shown while
        logging in, since login needs the person's existing ID,
        not a fresh suggestion. */
-  }{stage === "secureId" && !isLoginAttempt && <SuggestedIdRow id={suggestedRegId} onPick={setSecureId} />}{stage === "secureId" && isLoginAttempt && loginEntryMode === "mobile" && <div style={{ marginTop: 28, position: "relative", zIndex: 1, width: "100%" }}><PhoneDialPad
+  }{stage === "secureId" && !isLoginAttempt && <SuggestedIdRow id={suggestedRegId} onPick={setSecureId} />}{
+    /* Taken ID — two concrete alternatives, so the answer to "that one
+       is gone" is a tap rather than another twelve turns of the dial.
+       Picking one clears the verdict it was offered for. */
+  }{stage === "secureId" && !isLoginAttempt && takenIdSuggestions.length > 0 && <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}><span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: T.inkFaint, textAlign: "center" }}>
+                  Try one of these instead
+                </span>{takenIdSuggestions.map((suggestion) => <button
+    key={suggestion}
+    onClick={() => {
+      setSecureId(suggestion);
+      setTakenIdSuggestions([]);
+      setAuthError(null);
+    }}
+    aria-label={`Use the Gloobal ID ${suggestion}`}
+    className="v2-tap"
+    style={{
+      width: "100%",
+      maxWidth: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "11px 12px",
+      borderRadius: T.radiusMd,
+      border: `1px solid ${T.line}`,
+      background: T.surface,
+      boxShadow: T.shadowCard,
+      cursor: "pointer",
+      overflow: "hidden"
+    }}
+  ><ColoredGloobalId id={suggestion} /></button>)}</div>}{
+    /* Login only: proof the ID resolves to a real account, shown before
+       the PIN screen rather than after a sign-in that would have failed
+       for a reason the person could not see. */
+  }{stage === "secureId" && isLoginAttempt && loginEntryMode === "id" && loginIdResolved && <div style={{ width: "100%", display: "flex", justifyContent: "center", marginTop: 12 }}><span
+    style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "6px 12px",
+      borderRadius: 999,
+      background: T.accentSoft,
+      border: `1px solid ${T.line}`,
+      color: T.positive,
+      fontSize: 11.5,
+      fontWeight: 800
+    }}
+  >
+                  ✓ Account found
+                </span></div>}{stage === "secureId" && isLoginAttempt && loginEntryMode === "mobile" && <div style={{ marginTop: 28, position: "relative", zIndex: 1, width: "100%" }}><PhoneDialPad
     value={loginMobileBuffer}
     onChange={setLoginMobileBuffer}
     minLength={loginMinLen}
@@ -1170,7 +1550,12 @@ function GloobalId() {
     onSubmit={handleSubmitSecureId}
   /></div>}{stage === "referral" && <div style={{ marginTop: 32, position: "relative", zIndex: 1, width: "100%" }}><SymbolDialPad value={referralCode} onChange={setReferralCode} length={REFERRAL_LENGTH} /></div>}{stage === "phone" && phoneDialOpen && <div style={{ marginTop: 28, position: "relative", zIndex: 1, width: "100%" }}><PhoneDialPad
     value={phoneNumber}
-    onChange={setPhoneNumber}
+    onChange={(next) => {
+      // Editing the number retracts the "already registered" verdict —
+      // it was about the previous digits, not these.
+      setPhoneAlreadyRegistered(false);
+      setPhoneNumber(next);
+    }}
     minLength={mobileDigitRange(dialCountry.iso)[0]}
     maxLength={mobileDigitRange(dialCountry.iso)[1]}
     onSubmit={handleVerify}
@@ -1182,11 +1567,15 @@ function GloobalId() {
     onClick={handleSubmitSecureId}
     disabled={secureId.length !== SECURE_ID_LENGTH || authBusy}
     label={authBusy ? "Checking…" : "Submit"}
-  /></div>}{stage === "secureId" && isLoginAttempt && loginEntryMode === "id" && <div style={{ marginTop: 20, display: "flex", justifyContent: "center" }}><CircularInButton onClick={handleSubmitSecureId} disabled={secureId.length !== SECURE_ID_LENGTH} size={44} /></div>}{stage === "referral" && <div style={{ marginTop: 20, display: "flex", flexDirection: "column", alignItems: "center" }}><SubmitButton
+  /></div>}{stage === "secureId" && isLoginAttempt && loginEntryMode === "id" && <div style={{ marginTop: 20, display: "flex", justifyContent: "center" }}><CircularInButton
+    onClick={handleSubmitSecureId}
+    disabled={secureId.length !== SECURE_ID_LENGTH || authBusy}
+    size={44}
+  /></div>}{stage === "referral" && <div style={{ marginTop: 20, display: "flex", flexDirection: "column", alignItems: "center" }}><SubmitButton
     onClick={handleSubmitReferral}
     disabled={referralCode.length !== REFERRAL_LENGTH}
   /><button
-    onClick={() => flipTo("pin")}
+    onClick={() => flipTo("profile")}
     style={{
       marginTop: 10,
       border: "none",
@@ -1238,6 +1627,11 @@ function GloobalId() {
     onBack={requestBackFromRegBiometric}
     onVerify={handleRegBiometricVerify}
     scanning={regBiometricScanning}
+    notice={biometricNotice}
+    // The account and its PIN both exist by this point, so declining is a
+    // real choice rather than an abandoned registration.
+    onSkip={handleSkipRegBiometric}
+    skipLabel="Set this up later"
   />}{stage === "profile" && <ProfileSetupScreen
     onBack={requestBackFromProfile}
     onSubmit={handleSubmitProfile}
@@ -1259,6 +1653,12 @@ function GloobalId() {
     onBack={requestBackFromLoginBiometric}
     onVerify={handleLoginBiometricVerify}
     scanning={loginBiometricScanning}
+    notice={biometricNotice}
+    // No skip once a passkey exists — that is what makes this mandatory
+    // on every re-login rather than a suggestion. An account with nothing
+    // enrolled is offered setup here instead, and may defer it.
+    onSkip={gloobalBiometricEnrolled() ? null : handleSkipLoginBiometric}
+    skipLabel="Not now"
   />}{stage === "dashboard" && <Dashboard_default
     dialCountry={dialCountry}
     onLogout={handleStartOver}
@@ -1604,7 +2004,16 @@ function GloobalId() {
       textAlign: "center",
       cursor: "pointer"
     }}
-  >{authError}</div>}{showDiagnostics && <DiagnosticsScreen onClose={closeDiagnostics} />}{showPicker && <CountryPickerScreen
+  >{authError}</div>}{
+    /* Sits at the root so it can cover any screen a guarded action was
+       started from — Send Money, the Dashboard sheets, Scan & Pay — not
+       just the auth flow. */
+  }<BiometricPinFallbackModal
+    open={Boolean(pinFallbackRequest)}
+    symbolId={(registeredUser && registeredUser.symbolId) || secureId}
+    reason={pinFallbackRequest && pinFallbackRequest.reason}
+    onResolve={resolvePinFallback}
+  />{showDiagnostics && <DiagnosticsScreen onClose={closeDiagnostics} />}{showPicker && <CountryPickerScreen
     topCountries={TOP_COUNTRIES}
     countries={ALL_COUNTRIES}
     search={countrySearch}
@@ -1634,7 +2043,14 @@ function GloobalId() {
       setLoginCountrySearch("");
     }}
   />}<style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap');
+        /* Space Grotesk has no 800 face — asking for one here got the
+           whole weight dropped and left T.fontDisplay's 800 rendering as
+           700. Inter keeps its 800: that is the weight the GLOOBAL
+           wordmark (T.fontWordmark) is built on. index.html carries the
+           same two families as a <link>, which is what actually loads
+           them on first paint; this @import is the fallback for contexts
+           that render this component without that shell. */
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes phoneFlipPop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         @keyframes badgePop { from { transform: translateY(-3px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }

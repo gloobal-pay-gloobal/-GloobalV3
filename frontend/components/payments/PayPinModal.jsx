@@ -59,8 +59,14 @@ function PayPinModal({ open, onClose, amountLabel, onVerified }) {
 }
 function ProfileSetupScreen({ onBack, onSubmit, photo, onChangePhoto, docType, onSelectDocType, name, onChangeName }) {
   const fileInputRef = useRef4(null);
-  const canSubmit = !!docType && name.trim().length > 0;
   const isDefaultPhoto = photo === G_LOGO_DATA_URI;
+  // All three are required now. The photo used to be optional — the
+  // Gloobal mark stood in for it indefinitely — which meant accounts could
+  // reach the dashboard with no picture at all. `isDefaultPhoto` is the
+  // test for "nothing was chosen", since the placeholder is a known data
+  // URI rather than an empty value. Two characters is the floor on the
+  // name so a single stray keystroke does not count as one.
+  const canSubmit = !!docType && name.trim().length >= 2 && !isDefaultPhoto;
   const [logoHeroColor, setLogoHeroColor] = useState6(() => randomLogoFlipColor());
   useEffect6(() => {
     if (!isDefaultPhoto) return;
@@ -190,6 +196,12 @@ function ProfileSetupScreen({ onBack, onSubmit, photo, onChangePhoto, docType, o
       boxShadow: T.shadowCard
     }}
   ><Plus2 size={16} strokeWidth={2.75} /></span><input ref={fileInputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} /></div>{
+    /* Says why Continue is greyed out while the placeholder is still
+       showing. A disabled button with no reason attached reads as a
+       broken screen. */
+  }{isDefaultPhoto && <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, textAlign: "center", marginTop: -12 }}>
+            Tap to add a profile photo
+          </span>}{
     /* Document type — mandatory single pick */
   }<div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 10 }}><span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: T.inkFaint }}>
             Verify with a document

@@ -198,6 +198,87 @@ var GloobalApi = {
     return { newSymbolId: result.newSymbolId || newSymbolId, user: result.user || null };
   },
 
+  // PUT /api/profile/:symbolId — name (and email) only. Deliberately not a
+  // photo route: the backend accepts exactly `fullName` and `email` and
+  // rejects a body with neither, so the profile picture stays a local
+  // asset (see GLOOBAL_PROFILE_KEY_PREFIX in App.jsx) until the backend
+  // grows somewhere to put it.
+  async updateProfile(symbolId, updates) {
+    const result = await gloobalApiClient.put(`/api/profile/${encodeURIComponent(symbolId)}`, updates);
+    return result.user || null;
+  },
+
+  // --- Device authentication (WebAuthn passkeys) ------------------------
+  //
+  // Thin passthroughs: the option payloads are @simplewebauthn/server
+  // output and are handed to navigator.credentials verbatim (after the
+  // base64url decoding in frontend/hooks/useBiometric.js), so rewriting
+  // their shape here would only be a chance to get it wrong.
+  //
+  // These deliberately do NOT swallow their errors. The caller needs to
+  // tell a 404 ("nothing enrolled") and a 409 ("already enrolled") apart
+  // from a genuine failure, which it does by reading GloobalApiError.status.
+
+  // POST /api/passkey/status → { hasPasskey, user }
+  async passkeyStatus(symbolId) {
+    return gloobalApiClient.post("/api/passkey/status", { symbolId });
+  },
+
+  // POST /api/passkey/register/options → PublicKeyCredentialCreationOptions
+  async passkeyRegisterOptions(symbolId) {
+    return gloobalApiClient.post("/api/passkey/register/options", { symbolId }, { timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS });
+  },
+
+  // POST /api/passkey/register/verify → { verified, user }
+  async passkeyRegisterVerify(symbolId, response) {
+    return gloobalApiClient.post("/api/passkey/register/verify", { symbolId, response });
+  },
+
+  // POST /api/passkey/auth/options → PublicKeyCredentialRequestOptions
+  async passkeyAuthOptions(symbolId) {
+    return gloobalApiClient.post("/api/passkey/auth/options", { symbolId }, { timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS });
+  },
+
+  // POST /api/passkey/auth/verify → { verified, user }
+  async passkeyAuthVerify(symbolId, response) {
+    return gloobalApiClient.post("/api/passkey/auth/verify", { symbolId, response });
+  },
+
+  // --- Server-side face templates ---------------------------------------
+  //
+  // NOT what the biometric gate uses. The gate is WebAuthn (the passkey
+  // routes above), which on a phone is the device's own Face ID / Touch ID
+  // / fingerprint — a real hardware check, and the only one this bundle can
+  // actually perform.
+  //
+  // These two are the separate server-side face-template feature. They are
+  // wired but unused, because /api/face/enroll wants a numeric face
+  // descriptor (`{ symbolId, descriptor: number[], model, livenessPassed }`)
+  // and this app has no capture pipeline to produce one — there is no
+  // camera access and no embedding model in the bundle. Calling enroll
+  // without a real descriptor would be inventing biometric data, so it is
+  // left to the caller that can supply one.
+  //
+  // Both return 503 ("Face verification is not configured on this server.")
+  // until FACE_ENCRYPTION_KEY is set in the Render environment: the backend
+  // refuses to store a template it cannot encrypt at rest, which is the
+  // right call. Treat 503 as "offer this later", never as a reason to fail
+  // a registration.
+  async faceEnroll(symbolId, descriptor, model, livenessPassed) {
+    return gloobalApiClient.post("/api/face/enroll", { symbolId, descriptor, model, livenessPassed });
+  },
+
+  // GET /api/face/status/:symbolId — false on 503 as well as on "no
+  // template", since neither is a state the caller can do anything with.
+  async faceStatus(symbolId) {
+    try {
+      const result = await gloobalApiClient.get(`/api/face/status/${encodeURIComponent(symbolId)}`);
+      return Boolean(result && result.enrolled);
+    } catch (e) {
+      return false;
+    }
+  },
+
   // GET /api/referrals/:symbolId — Gloobal IDs and join dates only; the
   // backend deliberately returns no contact details.
   async getReferrals(symbolId) {

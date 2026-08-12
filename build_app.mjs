@@ -103,6 +103,11 @@ const BACKEND_MODULES = [
 
 const FRONTEND_MODULES = [
   "constants/theme.js",
+  // The biometric gate. Every guarded action calls into it, from the
+  // registration screens through to Send Money, so it is defined before
+  // any of them. It builds on the backend's session store and API client
+  // (both already emitted above, from BACKEND_MODULES).
+  "hooks/useBiometric.js",
   // Early: it wraps the full-screen views, so it must be defined before
   // anything that renders one.
   "components/common/ScreenErrorBoundary.jsx",

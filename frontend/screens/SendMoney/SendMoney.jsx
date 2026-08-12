@@ -216,16 +216,35 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
   }
   const [showPayBiometric, setShowPayBiometric] = useState15(false);
   const [payBiometricScanning, setPayBiometricScanning] = useState15(false);
-  const handlePayBiometricVerify = () => {
+  // The last gate before money moves. requireBiometric() runs a real
+  // WebAuthn assertion against this account's passkey — the Face ID /
+  // Touch ID / fingerprint prompt on a phone — and completePayment() (which
+  // is what issues POST /api/transactions/send) is only reached once it
+  // resolves true.
+  //
+  // This was a 700ms setTimeout that always succeeded, so the screen asked
+  // for a fingerprint and then paid regardless of the answer. A refusal now
+  // cancels the transaction outright.
+  //
+  // transactionStatus is set to "processing" only after the check passes.
+  // Setting it up front — as this used to — left the screen stuck mid-send
+  // on a refusal, with no transaction and no way back.
+  const handlePayBiometricVerify = async () => {
     if (transactionStatus === "processing" || payBiometricScanning) return;
+    setPayBiometricScanning(true);
+    const ok = await requireBiometric({ pinReason: "Confirm this payment with your PIN." });
+    setPayBiometricScanning(false);
+    setShowPayBiometric(false);
+    if (!ok) {
+      showToast2("Couldn't verify it's you — payment cancelled");
+      return;
+    }
+    // Minted here, after the gate, so a cancelled attempt does not consume
+    // an idempotency key that a genuine retry would then be deduplicated
+    // against.
     requestIdRef.current = generateRequestId();
     setTransactionStatus("processing");
-    setPayBiometricScanning(true);
-    setTimeout(() => {
-      setPayBiometricScanning(false);
-      setShowPayBiometric(false);
-      completePayment();
-    }, 700);
+    completePayment();
   };
   useEffect13(() => {
     if (pin.length < 6) return;

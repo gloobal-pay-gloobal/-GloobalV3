@@ -42,6 +42,37 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const [balanceBiometricScanning, setBalanceBiometricScanning] = useState14(false);
   const [historyTab, setHistoryTab] = useState14("receiving");
   const [historyMethodFilter, setHistoryMethodFilter] = useState14("all");
+  // Every guarded action on this screen goes through here. The gate is
+  // requireBiometric() (frontend/hooks/useBiometric.js): a real WebAuthn
+  // assertion against the passkey enrolled for this account, which on a
+  // phone is the Face ID / Touch ID / fingerprint prompt.
+  //
+  // These five used to be a 700ms setTimeout that always succeeded, so the
+  // prompt was an animation and the action behind it was never actually
+  // gated. Now a refusal aborts: `run` is only reached when the device
+  // check passed.
+  //
+  // The screen is closed on failure as well as success, because leaving a
+  // "Verify" panel up after a refusal invites tapping it again with no new
+  // information; the toast says what happened and the action can be
+  // restarted deliberately.
+  const runBiometricGate = async ({ scanning, setScanning, close, run, pinReason }) => {
+    if (scanning) return;
+    setScanning(true);
+    // No symbolId passed on purpose: requireBiometric resolves it from the
+    // account this device actually authenticated as. The myGloobalId prop
+    // is the ID the person typed at registration, which is not necessarily
+    // the one the backend settled on, and the passkey is stored against
+    // the backend's.
+    const ok = await requireBiometric({ pinReason });
+    setScanning(false);
+    close();
+    if (!ok) {
+      showToast2("Couldn't verify it's you — nothing was changed");
+      return;
+    }
+    run();
+  };
   const handleToggleBalance = () => {
     if (balanceVisible) {
       setBalanceVisible(false);
@@ -49,15 +80,15 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       setShowBalanceBiometric(true);
     }
   };
-  const handleBalanceBiometricVerify = () => {
-    if (balanceBiometricScanning) return;
-    setBalanceBiometricScanning(true);
-    setTimeout(() => {
-      setBalanceBiometricScanning(false);
-      setShowBalanceBiometric(false);
-      setBalanceVisible(true);
-    }, 700);
-  };
+  const handleBalanceBiometricVerify = () => runBiometricGate({
+    scanning: balanceBiometricScanning,
+    setScanning: setBalanceBiometricScanning,
+    close: () => setShowBalanceBiometric(false),
+    pinReason: "Confirm it's you to show your balance.",
+    // A refused check leaves the balance masked, which is the whole point
+    // of putting a gate on the eye icon.
+    run: () => setBalanceVisible(true)
+  });
   const [ghFlipped, setGhFlipped] = useState14(false);
   const [showGhCircleMenu, setShowGhCircleMenu] = useState14(false);
   const requestCloseGhCircleMenu = useBackClose(showGhCircleMenu, () => setShowGhCircleMenu(false));
@@ -233,16 +264,16 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   // before opening the prompt, so one biometric flow serves both
   // instead of duplicating it.
   const [settlePendingAmount, setSettlePendingAmount] = useState14(0);
-  const handleSettleAssetsBiometricVerify = () => {
-    if (settleAssetsBiometricScanning) return;
-    setSettleAssetsBiometricScanning(true);
-    setTimeout(() => {
-      setSettleAssetsBiometricScanning(false);
-      setShowSettleAssetsBiometric(false);
+  const handleSettleAssetsBiometricVerify = () => runBiometricGate({
+    scanning: settleAssetsBiometricScanning,
+    setScanning: setSettleAssetsBiometricScanning,
+    close: () => setShowSettleAssetsBiometric(false),
+    pinReason: "Confirm it's you to settle to Gloobal Bank.",
+    run: () => {
       onSettleAssetsToBank(settlePendingAmount);
       showToast2(`${ccy}${settlePendingAmount.toFixed(2)} settled to Gloobal Bank`);
-    }, 700);
-  };
+    }
+  });
   const CHART_W = 320, CHART_H = 160, CHART_PAD_L = 8, CHART_PAD_R = 8, CHART_PAD_T = 16, CHART_PAD_B = 22;
   const assetDetail = useMemo5(() => {
     if (!assetDetailKey) return null;
@@ -293,16 +324,20 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const requestCloseMyShare = useBackClose(showMyShare, () => setShowMyShare(false));
   const [showMyShareBiometric, setShowMyShareBiometric] = useState14(false);
   const [myShareBiometricScanning, setMyShareBiometricScanning] = useState14(false);
-  const handleMyShareBiometricVerify = () => {
-    if (myShareBiometricScanning) return;
-    setMyShareBiometricScanning(true);
-    setTimeout(() => {
-      setMyShareBiometricScanning(false);
-      setShowMyShareBiometric(false);
+  const handleMyShareBiometricVerify = () => runBiometricGate({
+    scanning: myShareBiometricScanning,
+    setScanning: setMyShareBiometricScanning,
+    close: () => setShowMyShareBiometric(false),
+    pinReason: "Confirm it's you to change My Share.",
+    // A refusal aborts the save outright: My Share is the cashback rate
+    // this account offers on every future payment, so it must not change
+    // on an unverified tap. The sheet stays open on failure so the rate
+    // is still there to try again with.
+    run: () => {
       setShowMyShare(false);
       showToast2(`My Share set to ${myShareRate.toFixed(2)}%`);
-    }, 700);
-  };
+    }
+  });
   const [showCreatorOverview, setShowCreatorOverview] = useState14(false);
   const requestCloseCreatorOverview = useBackClose(showCreatorOverview, () => setShowCreatorOverview(false));
   const [creatorFilterMin, setCreatorFilterMin] = useState14(0);
@@ -526,11 +561,34 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     const score = ghCategoryScore(key);
     return { color: catColor(key), pct: (score || 0) / 100 };
   });
-  const saveNewGloobalId = () => {
+  // Reached only after the biometric gate has passed (see
+  // handleUpdateIdBiometricVerify), which is what makes the PATCH below
+  // the first thing that happens on an authorised change and nothing at
+  // all on an unauthorised one.
+  //
+  // The backend is asked first and the local state follows its answer.
+  // This used to update only local state, so the app showed a new Gloobal
+  // ID that MongoDB had never heard of — the person would be told their ID
+  // had changed while every real payment still resolved against the old
+  // one. A rejected change now leaves both sides on the old ID.
+  //
+  // The Creator ID is a local-only identifier with no backend record, so a
+  // change made while in Creator mode stays local by design.
+  const saveNewGloobalId = async () => {
     if (newIdBuffer.length !== 12) return;
+    const previousId = shareableGloobalId;
+    const isBackedByAccount = shareRole !== "merchant" && myGloobalId && myGloobalId.length === 12;
+    if (isBackedByAccount) {
+      try {
+        await GloobalApi.changeSymbolId(previousId, newIdBuffer);
+      } catch (err) {
+        showToast2(err.message || "Couldn't update your Gloobal ID");
+        return;
+      }
+    }
     const now = /* @__PURE__ */ new Date();
     setIdUpdateHistory((h) => [
-      { id: newIdBuffer, previousId: shareableGloobalId, date: now.toLocaleDateString(void 0, { month: "short", day: "numeric", year: "numeric" }), time: formatClockTime(now) },
+      { id: newIdBuffer, previousId, date: now.toLocaleDateString(void 0, { month: "short", day: "numeric", year: "numeric" }), time: formatClockTime(now) },
       ...h
     ]);
     setGloobalIdOverride(newIdBuffer);
@@ -543,29 +601,31 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     if (newIdBuffer.length !== 12) return;
     setShowUpdateIdBiometric(true);
   };
-  const handleUpdateIdBiometricVerify = () => {
-    if (updateIdBiometricScanning) return;
-    setUpdateIdBiometricScanning(true);
-    setTimeout(() => {
-      setUpdateIdBiometricScanning(false);
-      setShowUpdateIdBiometric(false);
-      saveNewGloobalId();
-    }, 700);
-  };
+  const handleUpdateIdBiometricVerify = () => runBiometricGate({
+    scanning: updateIdBiometricScanning,
+    setScanning: setUpdateIdBiometricScanning,
+    close: () => setShowUpdateIdBiometric(false),
+    pinReason: "Confirm it's you to change your Gloobal ID.",
+    // Order matters here: the biometric resolves before saveNewGloobalId
+    // runs, and saveNewGloobalId is what issues
+    // PATCH /api/profile/change-symbol-id. A refusal means the request is
+    // never sent and the ID on file is untouched.
+    run: saveNewGloobalId
+  });
   const [referralNetwork] = useState14(() => generateReferralNetwork());
   const totalReferralEarned = referralNetwork.reduce((sum, m) => sum + m.earned, 0);
   const [showSettleReferralBiometric, setShowSettleReferralBiometric] = useState14(false);
   const [settleReferralBiometricScanning, setSettleReferralBiometricScanning] = useState14(false);
-  const handleSettleReferralBiometricVerify = () => {
-    if (settleReferralBiometricScanning) return;
-    setSettleReferralBiometricScanning(true);
-    setTimeout(() => {
-      setSettleReferralBiometricScanning(false);
-      setShowSettleReferralBiometric(false);
+  const handleSettleReferralBiometricVerify = () => runBiometricGate({
+    scanning: settleReferralBiometricScanning,
+    setScanning: setSettleReferralBiometricScanning,
+    close: () => setShowSettleReferralBiometric(false),
+    pinReason: "Confirm it's you to settle referral earnings.",
+    run: () => {
       onSettleReferralToBank(totalReferralEarned);
       showToast2(`${ccy}${totalReferralEarned.toFixed(2)} settled to Gloobal Bank`);
-    }, 700);
-  };
+    }
+  });
   // Personal and Creator are separate books: each role only sees the
   // spending/receiving history (and the wallet card's chart) for
   // transactions made while that role was active — balance itself

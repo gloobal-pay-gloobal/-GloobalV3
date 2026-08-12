@@ -78,7 +78,17 @@ function GloobalWordmark({ suffix = "", withSymbols = false }) {
       transition: "background 0.4s ease"
     }}
   />;
-  return <span aria-label={`Gloobal${suffix}`} style={{ textTransform: "uppercase", fontWeight: 800 }}>
+  // The wordmark carries its own family rather than inheriting
+  // T.fontDisplay. fontWeight 800 was already set here and still rendered
+  // at what read as a normal weight: T.fontDisplay is Space Grotesk, which
+  // ships no 800 face (Google serves only 500/600/700 for it, and silently
+  // drops the 800 that index.html used to ask for), so 800 fell back to
+  // the 700 face. Inter does have a true 800, is already loaded for the
+  // app, and is the same neutral grotesque category — so the surrounding
+  // text ("GL", "BAL ID") now renders at the weight this was always
+  // asking for. The two coloured circles are untouched: they are sized in
+  // em, so they track the text and keep their proportions.
+  return <span aria-label={`Gloobal${suffix}`} style={{ textTransform: "uppercase", fontWeight: 800, fontFamily: T.fontWordmark }}>
       Gl{dot(c1, s1, flipped1)}{dot(c2, s2, flipped2)}bal{suffix}</span>;
 }
 function CyclingBadge({ words, intervalMs = 1400 }) {

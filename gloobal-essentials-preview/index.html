@@ -30,10 +30,17 @@
     <!-- The design's display typeface (screen titles, balances, headings —
          T.fontDisplay in frontend/constants/theme.js) is Space Grotesk.
          Only the weights actually used are requested; the CSS
-         font-family list falls back to the system stack if this fails. -->
+         font-family list falls back to the system stack if this fails.
+
+         Space Grotesk is requested at 500/600/700 — those are the only
+         weights the family has. The 800 this used to ask for does not
+         exist for it and was being dropped server-side, which is why
+         `fontWeight: 800` on the GLOOBAL wordmark rendered as the 700
+         face. Inter is loaded alongside it purely for that wordmark
+         (T.fontWordmark), which does need a real 800. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@600;700;800&display=swap" rel="stylesheet" />
 
     <style>
       /* Inlined so the very first paint — before the stylesheet and the JS

@@ -29,7 +29,13 @@ var T = {
   shadowRaised: "0 14px 34px rgba(76,29,149,0.16)",
   shadowFloat: "0 20px 48px rgba(30,20,70,0.24)",
   fontDisplay: "'Space Grotesk', ui-sans-serif, system-ui, sans-serif",
-  fontBody: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif"
+  fontBody: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif",
+  // The GLOOBAL wordmark only. Kept separate from fontDisplay because the
+  // wordmark is the one place that needs a genuine 800: Space Grotesk
+  // (fontDisplay) tops out at 700, so an 800 asked for there quietly
+  // renders as 700. Inter carries a real 800 face and is loaded alongside
+  // Space Grotesk in index.html.
+  fontWordmark: "Inter, 'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
 };
 var C = {
   bgSoft: "#F8F7FC",

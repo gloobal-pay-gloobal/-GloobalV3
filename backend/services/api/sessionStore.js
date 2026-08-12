@@ -81,6 +81,26 @@ function gloobalSessionLoad() {
   return null;
 }
 
+// Flip the biometric-enrolment flag on its own, without needing the user
+// object to hand. The enrolment and verification paths both learn the
+// truth at moments where they only know the symbolId (see
+// frontend/hooks/useBiometric.js), and a no-op when there is no stored
+// session is correct: with nothing persisted there is nothing to correct,
+// and the next gloobalSessionSave writes the flag from scratch.
+function gloobalSessionMarkBiometricEnrolled(enrolled) {
+  const parsed = gloobalSessionReadRaw();
+  if (!parsed || !parsed.user) return;
+  try {
+    window.localStorage.setItem(
+      GLOOBAL_SESSION_KEY,
+      JSON.stringify(Object.assign({}, parsed, { biometricEnrolled: Boolean(enrolled) }))
+    );
+  } catch (e) {
+    // Same reasoning as gloobalSessionSave — a storage failure costs this
+    // device its shortcut, not its ability to sign in.
+  }
+}
+
 function gloobalSessionClear() {
   try {
     window.localStorage.removeItem(GLOOBAL_SESSION_KEY);
