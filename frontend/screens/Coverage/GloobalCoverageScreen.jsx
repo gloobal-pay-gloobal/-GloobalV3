@@ -45,8 +45,13 @@ function GloobalCoverageScreen({ onClose, dialCountry, sendHistory: sendHistoryP
     if (!countryQuery.trim()) return COVERAGE_ALL_COUNTRIES;
     return COVERAGE_ALL_COUNTRIES.filter((c) => countryMatches(c, countryQuery));
   }, [countryQuery]);
+  // The first 20 live countries, in the order the coverage table lists
+  // them. That order was previously produced by sorting on `baseUsers` —
+  // an invented per-country user count that no longer exists (see
+  // backend/data/coverage.js). This is the same kind of curated ordering
+  // without pretending it was derived from data nobody has.
   const top20 = useMemo8(() => {
-    return [...COVERAGE_COUNTRIES].sort((a, b) => b.baseUsers - a.baseUsers).slice(0, 20).map((c) => COVERAGE_ALL_COUNTRIES.find((x) => x.code === c.code)).filter(Boolean);
+    return COVERAGE_COUNTRIES.slice(0, 20).map((c) => COVERAGE_ALL_COUNTRIES.find((x) => x.code === c.code)).filter(Boolean);
   }, []);
   const [showAllCountries, setShowAllCountries] = useState16(false);
   const [allCountriesQuery, setAllCountriesQuery] = useState16("");

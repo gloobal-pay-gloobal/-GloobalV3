@@ -8,7 +8,6 @@ import {
   Plus as Plus2,
   Globe2,
   History as History2,
-  Users2,
   Fingerprint,
   ScanFace,
   Car as Car2
@@ -109,7 +108,6 @@ function CountryPickerScreen({ topCountries, countries, search, onSearch, onSele
   const [expanded, setExpanded] = useState6(false);
   const q = search.trim().toLowerCase();
   const filtered = q ? countries.filter((c) => countryMatches(c, search)) : expanded ? countries : topCountries;
-  const totalUsers = COVERAGE_COUNTRIES_RAW.reduce((sum, c) => sum + (c.baseUsers || 0), 0);
   return <div
     style={{
       position: "fixed",
@@ -219,7 +217,7 @@ function CountryPickerScreen({ topCountries, countries, search, onSearch, onSele
       cursor: "pointer",
       boxShadow: T.shadowCard
     }}
-  ><span style={{ display: "flex", alignItems: "center", gap: 6 }}><Users2 size={14} color={T.accent} /><span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{fmtUsers(totalUsers)}</span></span><span aria-hidden="true" style={{ width: 1, height: 16, background: T.line }} /><span style={{ display: "flex", alignItems: "center", gap: 6 }}><Globe2 size={14} color={T.accent} /><span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{ALL_COUNTRIES.length}</span></span></button>}</>}{q && filtered.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{filtered.map((c) => <button
+  ><span style={{ display: "flex", alignItems: "center", gap: 6 }}><Globe2 size={14} color={T.accent} /><span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{ALL_COUNTRIES.length}</span><span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkFaint }}>countries</span></span></button>}</>}{q && filtered.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{filtered.map((c) => <button
     key={c.iso}
     onClick={() => onSelect(c)}
     className="v2-row"
