@@ -52,6 +52,47 @@ function loadLocalProfile(symbolId) {
   }
 }
 
+// Turns one row of GET /api/transactions/:symbolId into the shape this
+// app's history list renders. The backend's projection is already
+// per-viewer — `direction` and `counterparty` are computed relative to the
+// symbolId that was asked for — so nothing here has to work out which side
+// of the transaction the person was on.
+//
+// Fields with no server equivalent get honest defaults rather than
+// invented values: `method` is not recorded server-side (the backend has
+// no concept of PayLater vs bank), and cashback is withheld per
+// transaction but not returned on this projection, so shareRate is 0
+// rather than a guess.
+function mapServerTransaction(row, viewerSymbolId) {
+  const created = row.createdAt ? new Date(row.createdAt) : new Date();
+  const counterparty = row.counterparty || {};
+  // fullName is the mobile number on accounts made before the name step
+  // existed, so a "name" that is just the number is not worth showing.
+  const counterpartyName =
+    counterparty.fullName && counterparty.fullName !== counterparty.symbolId
+      ? counterparty.fullName
+      : counterparty.symbolId || "Gloobal User";
+  return {
+    name: counterpartyName,
+    date: created.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    time: formatClockTime(created),
+    amount: Number(row.amount) || 0,
+    status: row.status || "completed",
+    direction: row.direction === "received" ? "received" : "sent",
+    method: "bank",
+    txnId: row.referenceId || row.id || "",
+    shareRate: 0,
+    memo: row.note || "",
+    ledgerRecordId: null,
+    // Server rows predate this device's Personal/Creator split and carry
+    // no role of their own; they belong to the personal book.
+    role: "user",
+    // Marks rows that came from MongoDB rather than this session's local
+    // ledger, so the two can never be confused when reconciling.
+    remote: true
+  };
+}
+
 // src/App.jsx
 function GloobalId() {
   const stageRef = useRef13(null);
@@ -519,6 +560,45 @@ function GloobalId() {
     setAuthError(null);
   }, [stage]);
 
+  // Real transaction history, once there is a dashboard to show it on.
+  //
+  // GloobalApi.getTransactionSummary existed and was never called from
+  // anywhere, so the history list only ever held what this session had
+  // sent — sign in on a new device and your entire payment history was
+  // gone. It is loaded once on reaching the dashboard.
+  //
+  // Server rows are seeded UNDER anything this session already added
+  // rather than replacing the list: a payment made moments ago is in local
+  // state, and may not be in the fetched page yet, so overwriting would
+  // make a just-completed payment disappear. Rows are keyed by txnId so a
+  // transaction present in both is not listed twice.
+  //
+  // A failure is silent by design. History is a read: the dashboard is
+  // fully usable without it, and an error banner over a working screen
+  // because a list is a few seconds late helps nobody.
+  useEffect15(() => {
+    if (stage !== "dashboard") return;
+    const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
+    if (!symbolId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { transactions } = await GloobalApi.getTransactionSummary(symbolId, "all");
+        if (cancelled || !Array.isArray(transactions)) return;
+        const mapped = transactions.map((row) => mapServerTransaction(row, symbolId));
+        setSendMoneyHistory((local) => {
+          const seen = new Set(local.map((entry) => entry.txnId).filter(Boolean));
+          return local.concat(mapped.filter((entry) => !entry.txnId || !seen.has(entry.txnId)));
+        });
+      } catch (e) {
+        /* read-only; the dashboard works without it */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stage, registeredUser]);
+
   // Login, ID mode: check the Gloobal ID the moment it is complete rather
   // than waiting for submit, so the card can show "Account found" before
   // the PIN screen is ever reached.
@@ -649,8 +729,31 @@ function GloobalId() {
   // The referral code is only carried here; it is submitted as part of
   // registration at the PIN step. Skipping leaves it empty, which the
   // backend accepts.
-  const handleSubmitReferral = () => {
-    if (referralCode.length === REFERRAL_LENGTH) flipTo("profile");
+  const handleSubmitReferral = async () => {
+    if (referralCode.length !== REFERRAL_LENGTH || authBusy) return;
+    // Check the code belongs to somebody before carrying it forward.
+    // GloobalApi.referralCodeExists existed and was called from nowhere,
+    // so a mistyped code travelled all the way to registration, where the
+    // backend silently drops it — the person believed they had credited a
+    // friend and nobody found out.
+    //
+    // Only a definite `false` (an explicit 404) blocks. Null means the
+    // lookup could not tell — a cold start or a 5xx — and rejecting a
+    // probably-genuine code over that would be worse than letting
+    // registration proceed, which is also why the backend never fails a
+    // registration over a bad code.
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const exists = await GloobalApi.referralCodeExists(referralCode);
+      if (exists === false) {
+        setAuthError("No Gloobal account uses that referral ID. Check it, or skip this step.");
+        return;
+      }
+      flipTo("profile");
+    } finally {
+      setAuthBusy(false);
+    }
   };
   // The account is actually created here — this is the one write that
   // matters. Two calls in order: register-symbol creates the User in
@@ -1676,7 +1779,8 @@ function GloobalId() {
     size={44}
   /></div>}{stage === "referral" && <div style={{ marginTop: 20, display: "flex", flexDirection: "column", alignItems: "center" }}><SubmitButton
     onClick={handleSubmitReferral}
-    disabled={referralCode.length !== REFERRAL_LENGTH}
+    disabled={referralCode.length !== REFERRAL_LENGTH || authBusy}
+    label={authBusy ? "Checking…" : void 0}
   /><button
     onClick={() => flipTo("profile")}
     style={{

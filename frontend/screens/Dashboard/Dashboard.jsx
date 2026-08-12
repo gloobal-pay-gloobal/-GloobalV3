@@ -637,7 +637,47 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     // never sent and the ID on file is untouched.
     run: saveNewGloobalId
   });
-  const [referralNetwork] = useState14(() => generateReferralNetwork());
+  // Real referrals from GET /api/referrals/:symbolId.
+  //
+  // generateReferralNetwork() returns [] and nothing ever replaced it, so
+  // this screen showed "No referrals yet" to everybody — including people
+  // who had actually referred somebody. GloobalApi.getReferrals existed
+  // and was never called from anywhere.
+  //
+  // The backend deliberately returns Gloobal IDs and join dates only, no
+  // contact details, so `name` is the referred ID. Per-referral earnings
+  // are not tracked server-side at all: the amounts stay 0 rather than
+  // being invented, which keeps the "Settle to Gloobal Bank" total honest
+  // — it settles what is actually attributable, which is currently
+  // nothing.
+  const [referralNetwork, setReferralNetwork] = useState14(() => generateReferralNetwork());
+  useEffect12(() => {
+    const symbolId = currentSymbolId;
+    if (!symbolId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const referrals = await GloobalApi.getReferrals(symbolId);
+        if (cancelled || !Array.isArray(referrals)) return;
+        setReferralNetwork(
+          referrals.map((r) => ({
+            name: r.referredSymbolId || "Gloobal User",
+            symbolId: r.referredSymbolId || "",
+            joinedAt: r.createdAt || null,
+            status: r.status === "completed" ? "Active" : "Pending",
+            earned: 0,
+            earnedToday: 0
+          }))
+        );
+      } catch (e) {
+        // A read. The screen already renders an empty state correctly, so
+        // a failed fetch degrades to exactly that rather than an error.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSymbolId]);
   const totalReferralEarned = referralNetwork.reduce((sum, m) => sum + m.earned, 0);
   const [showSettleReferralBiometric, setShowSettleReferralBiometric] = useState14(false);
   const [settleReferralBiometricScanning, setSettleReferralBiometricScanning] = useState14(false);
