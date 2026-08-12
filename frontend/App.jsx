@@ -681,12 +681,25 @@ function GloobalId() {
       // that now exists. Done here rather than at the profile step because
       // that step runs before the account does.
       persistLocalProfile(newSymbolId, documentedName.trim(), profilePhoto);
-      // The account is created with the right name already, so this only
-      // has to repair the case where the registration itself came back
-      // with something else (an existing account being re-claimed). It is
-      // never allowed to fail the registration.
-      if (result.user.fullName !== documentedName.trim()) {
-        GloobalApi.updateProfile(newSymbolId, { fullName: documentedName.trim() }).catch(() => {});
+      // This — not the register call above — is what actually sets the
+      // name. POST /api/register-symbol destructures `fullName` out of the
+      // body and then throws it away: it does
+      // `cleanFullName = cleanMobileNumber` and stores that, so every
+      // account it creates is named after its own phone number regardless
+      // of what was sent. (Confirmed against live data: resolving an
+      // existing account returns fullName "+2528685888888".) PUT
+      // /api/profile/:symbolId is the only route that honours a real name,
+      // so it is awaited rather than fired and forgotten — an earlier
+      // version let it fail silently, which meant the name quietly stayed
+      // as the phone number and nothing said so.
+      //
+      // It still must not fail the registration. The account and its PIN
+      // both exist by now; a name that did not reach the server is worth a
+      // warning and a retry, not throwing the whole thing away.
+      try {
+        await GloobalApi.updateProfile(newSymbolId, { fullName: documentedName.trim() });
+      } catch (err) {
+        setAuthError("Your name couldn't be saved to your profile just now — we'll retry next time you sign in.");
       }
       // The passkey has to be enrolled against an account that exists, so
       // the gate is told who it is working for only now.
@@ -754,6 +767,15 @@ function GloobalId() {
       GloobalApi.saveSession(result.user, phoneNumber);
       gloobalSetBiometricSymbolId(result.user.symbolId || symbolId);
       setLoginAuthPin("");
+      // The retry the registration step promises when PUT /api/profile
+      // fails. The local copy is the one the person actually typed; if the
+      // server still disagrees, push it again. Cheap, silent, and harmless
+      // when it is already in sync (the condition is false). Never
+      // awaited — a sign-in must not wait on a display name.
+      const localProfile = loadLocalProfile(result.user.symbolId || symbolId);
+      if (localProfile && localProfile.name && localProfile.name !== result.user.fullName) {
+        GloobalApi.updateProfile(result.user.symbolId || symbolId, { fullName: localProfile.name }).catch(() => {});
+      }
       // Whatever the local session claims, the server knows whether this
       // account actually has a passkey. Asked once, here, so the next
       // screen already knows whether it is verifying or offering setup.

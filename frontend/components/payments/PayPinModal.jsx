@@ -265,6 +265,12 @@ function ProfileSetupScreen({ onBack, onSubmit, photo, onChangePhoto, docType, o
           </span><input
     value={name}
     onChange={(e) => onChangeName(e.target.value)}
+    // PUT /api/profile/:symbolId rejects anything over 80 characters with a
+    // 400, and that route is the only one that stores a real name (register
+    // -symbol overwrites fullName with the mobile number). Without this cap
+    // a long name is accepted here, 400s during registration, and the
+    // account quietly keeps the phone number as its display name.
+    maxLength={80}
     placeholder="Full name as shown on document"
     style={{
       width: "100%",
