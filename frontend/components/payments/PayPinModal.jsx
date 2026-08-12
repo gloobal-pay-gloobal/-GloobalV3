@@ -1,18 +1,31 @@
 // src/components/payments/PayPinModal.jsx
-// Step two of the same sequence: a 6-digit OTP, same demo code
-// (SEND_OTP) and same PhoneDialPad component Send Money/registration/
-// login already use — one PIN entry pattern app-wide, not a second
-// implementation. onVerified fires once, on the correct code; the
-// caller is responsible for moving on to biometric verification next.
+// The PIN confirmation in front of Scan & Pay and Pay a Business.
+//
+// It used to compare what was typed against SEND_OTP — the literal
+// "123456" declared in SendMoney.jsx — so the person's real PIN was never
+// checked: 123456 opened anyone's payment, and their actual PIN was
+// rejected. Same defect Send Money had; this is the other half of it.
+//
+// Now POST /api/pin/verify decides, the same route login uses, against the
+// bcrypt hash the backend holds. That also brings the backend's own
+// answers with it: five wrong tries locks the PIN for ten minutes and says
+// so, which a local string compare could never report.
+//
+// Nothing downstream needs the PIN value, unlike Send Money — both callers
+// go on to executeTransaction, which posts to the local ledger and never
+// to POST /api/transactions/send — so it is checked, discarded, and only
+// the fact of the check is passed on via onVerified().
 function PayPinModal({ open, onClose, amountLabel, onVerified }) {
   const [pin, setPin] = useState("");
   const [pinRevealed, setPinRevealed] = useState(false);
-  const [pinError, setPinError] = useState(false);
+  const [pinError, setPinError] = useState(null);
+  const [checking, setChecking] = useState(false);
   const errorTimer = useRef2(null);
   useEffect(() => {
     if (!open) {
       setPin("");
-      setPinError(false);
+      setPinError(null);
+      setChecking(false);
       if (errorTimer.current) {
         clearTimeout(errorTimer.current);
         errorTimer.current = null;
@@ -20,35 +33,57 @@ function PayPinModal({ open, onClose, amountLabel, onVerified }) {
     }
   }, [open]);
   useEffect(() => {
-    if (pin.length < 6) return;
-    if (pin === SEND_OTP) {
-      errorTimer.current = setTimeout(() => {
+    if (pin.length < 6 || checking) return;
+    let cancelled = false;
+    (async () => {
+      setChecking(true);
+      setPinError(null);
+      const symbolId = gloobalCurrentSymbolId();
+      try {
+        // No signed-in account on this device means there is no PIN on
+        // file to check against — the local-simulation path this build
+        // still supports. Nothing is verified because nothing real is
+        // being paid.
+        if (symbolId) await GloobalApi.verifyPin(symbolId, pin);
+        if (cancelled) return;
+        setChecking(false);
         setPin("");
         onVerified();
-      }, 280);
-    } else {
-      setPinError(true);
-      errorTimer.current = setTimeout(() => {
-        setPin("");
-        setPinError(false);
-      }, 550);
-    }
-    return () => clearTimeout(errorTimer.current);
+      } catch (err) {
+        if (cancelled) return;
+        setChecking(false);
+        // A request that never got an answer judged nothing — saying
+        // "incorrect" there would be telling someone their own PIN is
+        // wrong because the server was asleep.
+        setPinError(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+        errorTimer.current = setTimeout(() => {
+          setPin("");
+          setPinError(null);
+        }, 900);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [pin]);
   if (!open) return null;
   return <div
     style={{ position: "fixed", inset: 0, zIndex: 520, background: "rgba(15,12,35,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
     role="dialog"
     aria-modal="true"
-    aria-label="Enter OTP to confirm payment"
+    aria-label="Enter your PIN to confirm payment"
   ><div style={{ width: "100%", maxWidth: 360, background: T.bg, borderRadius: T.radiusXl, padding: "26px 22px 24px", position: "relative" }}><button
     onClick={onClose}
     aria-label="Cancel"
     className="v2-tap"
     style={{ position: "absolute", top: 14, right: 14, width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
   ><X4 size={16} color={T.inkFaint} /></button><div style={{ width: 44, height: 44, borderRadius: "50%", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}><Lock size={20} color={T.accent} /></div><h3 style={{ fontSize: 17, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, margin: "0 0 4px" }}>
-        Enter OTP
-      </h3>{amountLabel && <div style={{ borderRadius: T.radiusMd, border: `1px solid ${T.line}`, background: T.surfaceAlt, padding: "12px 16px", textAlign: "center", margin: "14px 0 4px", fontSize: 20, fontWeight: 800, color: T.negative, fontFamily: T.fontDisplay }}>{amountLabel}</div>}{pinError && <div style={{ fontSize: 12, color: T.negative, fontWeight: 700, textAlign: "center", marginTop: 6 }}>Incorrect OTP</div>}<div style={{ marginTop: 14 }}><PhoneDialPad
+        Enter PIN
+      </h3>{amountLabel && <div style={{ borderRadius: T.radiusMd, border: `1px solid ${T.line}`, background: T.surfaceAlt, padding: "12px 16px", textAlign: "center", margin: "14px 0 4px", fontSize: 20, fontWeight: 800, color: T.negative, fontFamily: T.fontDisplay }}>{amountLabel}</div>}{
+    /* The backend's own message rather than a flat "Incorrect": it
+       distinguishes a wrong PIN from a locked one, and that difference
+       matters to whoever is holding the phone. */
+  }{pinError && <div role="alert" style={{ fontSize: 12, color: T.negative, fontWeight: 700, textAlign: "center", marginTop: 6, lineHeight: 1.4 }}>{pinError}</div>}<div style={{ marginTop: 14 }}><PhoneDialPad
     value={pin}
     onChange={setPin}
     minLength={6}

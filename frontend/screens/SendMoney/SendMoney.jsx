@@ -30,7 +30,10 @@ function Flag({ emoji, size = "md", badge }) {
   const [w, h] = FLAG_CHIP_PX[size];
   return <span className="flag-chip-wrap"><span className={`flag-chip ${size}`}><FlagEmoji flag={emoji} width={w} height={h} radius={0} /></span>{badge && <span className={`flag-badge ${badge}`}>{badge === "send" ? <ArrowUpRight2 size={11} strokeWidth={2.75} /> : <ArrowDownLeft2 size={11} strokeWidth={2.75} />}</span>}</span>;
 }
-var SEND_OTP = "123456";
+// SEND_OTP — the literal "123456" — used to live here, and was what both
+// this screen and PayPinModal compared a typed PIN against. Both now ask
+// POST /api/pin/verify instead, so nothing reads it: a hardcoded PIN that
+// unlocks payments has no business sitting in the bundle, even unused.
 function buildSenderProfile(sender) {
   const s = sender || { name: "United States", iso: "US", dialCode: "+1", flag: "\u{1F1FA}\u{1F1F8}", phoneNumber: "" };
   const digits = (s.phoneNumber || "").trim();
