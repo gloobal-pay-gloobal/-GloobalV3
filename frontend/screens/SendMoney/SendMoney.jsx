@@ -106,6 +106,21 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     setTransactionStatus("idle");
   });
   const [searchStage, setSearchStage] = useState15("dialing");
+  // Recipient lookup against GET /api/users/resolve. searchError carries
+  // the inline "no such user" message; searchBusy blocks a second lookup
+  // and disables Search while one is in flight.
+  const [searchBusy, setSearchBusy] = useState15(false);
+  const [searchError, setSearchError] = useState15(null);
+  // Shows a stored mobile number without printing it in full — the
+  // recipient confirmation has to be recognisable to the sender without
+  // handing out somebody else's number to anyone who types an ID.
+  function maskMobileNumber(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const tail = raw.slice(-4);
+    const head = raw.startsWith("+") ? raw.slice(0, 3) : "";
+    return `${head}${head ? " " : ""}•••• ${tail}`;
+  }
   const [searchMode, setSearchMode] = useState15("id");
   const [idBuffer, setIdBuffer] = useState15("");
   const [mobileBuffer, setMobileBuffer] = useState15("");
@@ -131,6 +146,11 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     };
   }, []);
   const [transactionStatus, setTransactionStatus] = useState15("idle");
+  // The PIN the backend has already confirmed, held out of visible state so
+  // closePin() can wipe the on-screen digits without also destroying the
+  // value POST /api/transactions/send still needs.
+  const verifiedPinRef = useRef11(null);
+  const [pinChecking, setPinChecking] = useState15(false);
   const requestIdRef = useRef11(null);
   const appliedRequestIdRef = useRef11(null);
   async function completePayment() {
@@ -155,12 +175,14 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
         amount: convertedAmount,
         currency: top.currency,
         receiver: bottom,
-        pin,
+        // The verified PIN, from the ref — `pin` state is "" by now.
+        pin: verifiedPinRef.current || "",
         payMethodLabel: payMethod,
         memo: `Send Money to ${bottom.name}`,
         clientRequestId: requestIdRef.current
       });
       if (remote && remote.ok === false && !remote.skipped) {
+        verifiedPinRef.current = null;
         setTransactionStatus("failed");
         showToast2(remote.reason || "The server rejected this payment.");
         // Let the same request be retried — the server never posted it.
@@ -189,6 +211,7 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
         })
       : { ok: true, ledgerRecordId: null };
     if (!result.ok) {
+      verifiedPinRef.current = null;
       setTransactionStatus("failed");
       showToast2(result.reason || "Insufficient balance");
       setTimeout(() => setTransactionStatus("idle"), 1500);
@@ -210,6 +233,10 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
       ledgerRecordId: result.ledgerRecordId,
       txnId
     });
+    // Held no longer than the send it authorised.
+    verifiedPinRef.current = null;
+    // The receipt is set before the status flips, so "completed" is never
+    // observable without one to show for it.
     setReceipt(receipt2);
     setTransactionStatus("completed");
     if (onSendComplete) onSendComplete(historyEntry);
@@ -236,6 +263,10 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     setPayBiometricScanning(false);
     setShowPayBiometric(false);
     if (!ok) {
+      // The PIN authorised a send that is not happening. Drop it rather
+      // than leaving it available to a later attempt that never passed a
+      // check of its own.
+      verifiedPinRef.current = null;
       showToast2("Couldn't verify it's you — payment cancelled");
       return;
     }
@@ -246,20 +277,64 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     setTransactionStatus("processing");
     completePayment();
   };
+  // PIN entry, verified against the backend.
+  //
+  // Two bugs lived here, and together they made the payment unfinishable.
+  //
+  // First, the PIN was compared to SEND_OTP — a hardcoded "123456" in this
+  // file. The person's real PIN was never checked, and any account whose
+  // PIN was not literally 123456 could not get past this step at all.
+  //
+  // Second, and this is the "PIN required" loop: on success this called
+  // requestClosePin(), and closePin() does setPin(""). The biometric step
+  // then ran, and by the time completePayment() reached
+  // POST /api/transactions/send the pin it forwarded was the empty string.
+  // That route requires the PIN in its body and bcrypt-checks it
+  // server-side, so it answered 400 "PIN is required before sending
+  // transaction." — after the person had entered the right PIN and passed
+  // the biometric. No transaction, so no receipt either.
+  //
+  // The verified PIN is now held in a ref instead of the visible state.
+  // closePin() still wipes the on-screen buffer immediately (the digits
+  // should not linger on screen), while the ref carries the value the one
+  // step further it has to travel. It is cleared the moment the send
+  // settles, either way.
   useEffect13(() => {
-    if (pin.length < 6) return;
-    if (pin === SEND_OTP) {
-      pinErrorTimer.current = setTimeout(() => {
+    if (pin.length < 6 || pinChecking) return;
+    let cancelled = false;
+    (async () => {
+      setPinChecking(true);
+      const symbolId = gloobalCurrentSymbolId();
+      try {
+        if (symbolId) {
+          await GloobalApi.verifyPin(symbolId, pin);
+        }
+        // No symbolId means this device has no signed-in account to check
+        // against — the local-simulation path this screen still supports
+        // for placeholder receivers. Nothing to verify, nothing to send.
+        if (cancelled) return;
+        verifiedPinRef.current = pin;
+        setPinChecking(false);
         requestClosePin();
         setShowPayBiometric(true);
-      }, 280);
-    } else {
-      setPinError(true);
-      pinErrorTimer.current = setTimeout(() => {
-        setPin("");
-        setPinError(false);
-      }, 550);
-    }
+      } catch (err) {
+        if (cancelled) return;
+        setPinChecking(false);
+        verifiedPinRef.current = null;
+        setPinError(true);
+        // The backend's own words: it distinguishes a wrong PIN from a
+        // locked one ("PIN is temporarily locked", after five tries) and
+        // that difference matters to whoever is holding the phone.
+        showToast2(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+        pinErrorTimer.current = setTimeout(() => {
+          setPin("");
+          setPinError(false);
+        }, 550);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [pin]);
   function showToast2(msg) {
     setToast(msg);
@@ -304,31 +379,56 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     setCountryDropdownOpen(false);
     setBottom((b) => ({ ...b, country: c.name, flag: c.flag }));
   }
-  function resolveSearch() {
+  // Looks the recipient up on the backend instead of inventing one.
+  //
+  // This used to accept anything: whatever twelve symbols were dialled
+  // became the recipient, with randomName() standing in for a name and
+  // randomLocalPhone() for a number, and the send proceeded against an
+  // account that need not exist. Money aimed at a typo was
+  // indistinguishable from money aimed at a real person.
+  //
+  // GET /api/users/resolve takes `identifier` and accepts either a Gloobal
+  // ID or a full international mobile number, so one call serves both
+  // modes. (Not `?symbolId=` / `?phone=` — this backend reads neither.)
+  async function resolveSearch() {
+    if (searchBusy) return;
     const c = effectiveSearchCountry;
-    const receiverShareRate = randomShareRate();
-    if (searchMode === "id") {
-      setBottom({
-        country: c.name,
-        flag: c.flag,
-        id: idBuffer,
-        phone: `${c.dialCode} ${randomLocalPhone(c.iso)}`,
-        currency: COUNTRY_CURRENCY[c.iso] || "USD",
-        name: randomName(),
-        shareRate: receiverShareRate
-      });
-    } else {
-      const grouped = mobileBuffer.replace(/(\d{3})(?=\d)/g, "$1 ");
-      setBottom({
-        country: c.name,
-        flag: c.flag,
-        phone: `${c.dialCode} ${grouped}`,
-        id: `${c.iso}${c.dialCode.replace("+", "")}\u2022\u2022\u2022\u2022\u2022\u2022`,
-        currency: COUNTRY_CURRENCY[c.iso] || "USD",
-        name: randomName(),
-        shareRate: receiverShareRate
-      });
+    const identifier = searchMode === "id" ? idBuffer : `${c.dialCode}${mobileBuffer.replace(/\D/g, "")}`;
+    setSearchBusy(true);
+    setSearchError(null);
+    let user;
+    try {
+      user = await GloobalApi.resolveUser(identifier);
+    } catch (err) {
+      setSearchBusy(false);
+      // Only a definite 404 means "no such person". A cold start or a 5xx
+      // is not an answer about this recipient, and reporting it as one
+      // would tell somebody their friend has no Gloobal account.
+      setSearchError(
+        err instanceof GloobalApiError && err.status === 404
+          ? "No Gloobal user found. Check the ID and try again."
+          : err.message
+      );
+      return;
     }
+    setSearchBusy(false);
+    const grouped = mobileBuffer.replace(/(\d{3})(?=\d)/g, "$1 ");
+    setBottom({
+      country: c.name,
+      flag: c.flag,
+      // The recipient's CURRENT registered ID, as the backend holds it —
+      // not what was typed. Someone paying an ID that has since been
+      // changed is shown, and pays, the ID the account actually has now.
+      id: user.symbolId || identifier,
+      // fullName is the mobile number on accounts created before the name
+      // step existed (register-symbol overwrites it), and a name that is
+      // just the number is not a name worth showing.
+      name: user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User",
+      phone: maskMobileNumber(user.mobileNumber) || (searchMode === "mobile" ? `${c.dialCode} ${grouped}` : ""),
+      currency: COUNTRY_CURRENCY[c.iso] || "USD",
+      // The receiver's real rate off their own account, not a random one.
+      shareRate: Number(user.cashbackRate) || 0
+    });
     setSearchStage("found");
     setFoundDisplayMode("name");
     setTopOpen(false);
@@ -737,25 +837,45 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
       borderRadius: "50%",
       zIndex: 1
     }}
-  ><GH2HFlipCircle size={22} /></div><div style={{ height: 14 }} aria-hidden="true" />{searchStage === "dialing" && <span
-    aria-hidden="true"
+  ><GH2HFlipCircle size={22} /></div><div style={{ height: 14 }} aria-hidden="true" />{
+    /* Switches the recipient search between Gloobal ID and phone
+       number.
+
+       This was a <span aria-hidden="true"> with no onClick: it looked
+       like a control, and toggleSearchMode was defined and ready, but
+       nothing ever called it. Tapping did nothing, and because the mode
+       could never leave "id", the entire phone-number path below —
+       country picker, dial-code tag, PhoneDialPad — was unreachable.
+       That is why the flip "did not work" AND the mobile option was
+       "missing": one unbound handler, two symptoms.
+
+       Now a real button: labelled, reachable by keyboard, and it says
+       which mode it will switch to rather than being decoration. */
+  }{searchStage === "dialing" && <button
+    type="button"
+    onClick={toggleSearchMode}
+    aria-label={searchMode === "id" ? "Search by phone number instead" : "Search by Gloobal ID instead"}
+    className="v2-tap"
     style={{
       position: "absolute",
       top: -14,
       right: -10,
-      width: 40,
+      minWidth: 40,
       height: 40,
-      borderRadius: "50%",
+      padding: "0 10px",
+      borderRadius: 999,
       border: "1px solid rgba(20,18,43,0.06)",
       background: "#fff",
       color: "#7c3aed",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
+      gap: 6,
+      cursor: "pointer",
       boxShadow: "0 4px 14px rgba(20,18,43,0.12)",
       zIndex: 3
     }}
-  ><RefreshCw4 size={18} /></span>}<div className="card-header"><div className="card-header-left" style={{ position: "relative", flex: searchStage === "dialing" ? 1 : void 0 }}>{searchStage === "dialing" ? <div style={{ position: "relative", flexShrink: 0 }}><button
+  ><RefreshCw4 size={18} style={{ transform: searchMode === "mobile" ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.4s cubic-bezier(0.22, 1, 0.36, 1)" }} /><span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.3 }}>{searchMode === "id" ? "ID" : "TEL"}</span></button>}<div className="card-header"><div className="card-header-left" style={{ position: "relative", flex: searchStage === "dialing" ? 1 : void 0 }}>{searchStage === "dialing" ? <div style={{ position: "relative", flexShrink: 0 }}><button
     onClick={() => setCountryDropdownOpen((o) => !o)}
     aria-label={`Country: ${effectiveSearchCountry.name}. Tap to search for someone outside your own country`}
     className="v2-tap"
@@ -831,15 +951,19 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     onClick={() => selectSearchCountry(c)}
     aria-label={c.name}
     title={c.name}
-  ><div style={{ position: "relative", width: 26, height: 20, borderRadius: 5, ...countryGlowStyle(ACTIVE_ISO_SET.has(c.iso), true) }}><div style={{ position: "absolute", inset: 0, borderRadius: 5, overflow: "hidden" }}><FlagEmoji flag={c.flag} width={26} height={20} /></div></div></button>)}</div></>}</div>{searchStage === "found" && <button className="collapse-btn" onClick={() => setBottomOpen((o) => !o)} aria-label="Toggle details">{bottomOpen ? <ChevronUp2 size={20} /> : <ChevronDown2 size={20} />}</button>}</div>{searchStage === "dialing" && <div className="dial-entry">{searchMode === "id" ? <><SymbolChipRow length={ID_SEARCH_LENGTH} value={idBuffer} masked={false} /><div style={{ marginTop: 22, width: "100%" }}><SymbolDialPad value={idBuffer} onChange={setIdBuffer} length={ID_SEARCH_LENGTH} /></div></> : <PhoneDialPad
+  ><div style={{ position: "relative", width: 26, height: 20, borderRadius: 5, ...countryGlowStyle(ACTIVE_ISO_SET.has(c.iso), true) }}><div style={{ position: "absolute", inset: 0, borderRadius: 5, overflow: "hidden" }}><FlagEmoji flag={c.flag} width={26} height={20} /></div></div></button>)}</div></>}</div>{searchStage === "found" && <button className="collapse-btn" onClick={() => setBottomOpen((o) => !o)} aria-label="Toggle details">{bottomOpen ? <ChevronUp2 size={20} /> : <ChevronDown2 size={20} />}</button>}</div>{searchStage === "dialing" && <div className="dial-entry">{searchMode === "id" ? <><SymbolChipRow length={ID_SEARCH_LENGTH} value={idBuffer} masked={false} /><div style={{ marginTop: 22, width: "100%" }}><SymbolDialPad value={idBuffer} onChange={(v) => { setSearchError(null); setIdBuffer(v); }} length={ID_SEARCH_LENGTH} /></div></> : <PhoneDialPad
     value={mobileBuffer}
-    onChange={setMobileBuffer}
+    onChange={(v) => { setSearchError(null); setMobileBuffer(v); }}
     minLength={minMobileDigits}
     maxLength={maxMobileDigits}
-  />}<SubmitButton
+  />}{
+    /* Inline, under the pad it belongs to. The recipient either exists or
+       the send cannot proceed, so this is part of the field rather than a
+       transient toast that can be missed. */
+  }{searchError && <div role="alert" style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: T.negative, textAlign: "center", lineHeight: 1.45 }}>{searchError}</div>}<SubmitButton
     onClick={resolveSearch}
-    disabled={searchMode === "id" ? idBuffer.length < ID_SEARCH_LENGTH : mobileBuffer.length < minMobileDigits}
-    label="Search"
+    disabled={searchBusy || (searchMode === "id" ? idBuffer.length < ID_SEARCH_LENGTH : mobileBuffer.length < minMobileDigits)}
+    label={searchBusy ? "Checking…" : "Search"}
   /></div>}{searchStage === "found" && bottomOpen && <><div className="contact-block"><div className="contact-row"><span className="contact-text">{bottom.phone}</span><button
     className="copy-btn"
     onClick={() => showToast2("Calling \u2014 coming soon")}

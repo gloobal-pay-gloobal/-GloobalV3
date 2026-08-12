@@ -6,20 +6,24 @@ function buildTransactionSnapshot({ sender, receiver, amount, convertedAmount, p
   const methodKey = !payMethod ? "bank" : payMethod.includes("PayLater") ? "paylater" : payMethod.includes("Coin") ? "coin" : "bank";
   const receipt = {
     direction: "sent",
-    name: receiver.name,
-    flag: receiver.flag,
-    id: receiver.id,
-    phone: receiver.phone,
+    // Defensive defaults on every field the receipt renders. A single
+    // undefined here used to be enough to throw inside ReceiptModal while
+    // the payment itself had already gone through — the money moved and
+    // the person got no receipt, which is the worst way to fail.
+    name: receiver.name || "Gloobal User",
+    flag: receiver.flag || "",
+    id: receiver.id || "",
+    phone: receiver.phone || "",
     shareRate: txnShareRate,
     // "You send" — the exact amount debited, in the sender's own
     // currency, converted from what was typed.
-    amount: convertedAmount,
+    amount: Number(convertedAmount) || 0,
     currencySymbol: CURRENCY_SYMBOL[sender.currency] || "",
-    currencyCode: sender.currency,
+    currencyCode: sender.currency || "USD",
     // "They receive" — the amount actually typed, in the receiver's
     // currency (what they asked for).
     convertedAmount: parseFloat(amount) || null,
-    convertedCurrency: receiver.currency,
+    convertedCurrency: receiver.currency || sender.currency || "USD",
     method: payMethod || "Gloobal Bank",
     date: now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
     time: txnTime,

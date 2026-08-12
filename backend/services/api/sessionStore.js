@@ -112,6 +112,62 @@ function gloobalSessionMarkBiometricEnrolled(enrolled) {
   }
 }
 
+// --- The current Gloobal ID: one source of truth -----------------------
+//
+// Every screen that shows "your Gloobal ID" reads it from here. Before
+// this, each one reached for whatever it happened to have: the Receive QR
+// and the share card used the Dashboard's local `gloobalIdOverride`, while
+// Personal Details and the profile header used the `myGloobalId` prop
+// threaded down from App — so the moment somebody changed their ID, the
+// same account showed two different IDs on two different screens.
+//
+// The stored session is that source rather than a new dedicated key. It is
+// already where the signed-in identity lives, already written on
+// registration, login and ID change, and already the thing the biometric
+// gate and every API call key off. A second key holding the same value
+// would just be a second thing to keep in sync — which is the bug, not
+// the fix.
+function gloobalCurrentSymbolId() {
+  const session = gloobalSessionLoad();
+  return (session && session.user && session.user.symbolId) || null;
+}
+
+// Fired whenever the stored ID changes, so screens already on screen
+// update without a reload. Listeners: useCurrentSymbolId (see
+// frontend/hooks/useCurrentSymbolId.js).
+var GLOOBAL_SYMBOL_ID_EVENT = "gloobal:symbolIdChanged";
+
+function gloobalSessionSetSymbolId(newSymbolId) {
+  if (!newSymbolId) return;
+  const parsed = gloobalSessionReadRaw();
+  if (!parsed || !parsed.user) return;
+  if (parsed.user.symbolId === newSymbolId) return;
+  try {
+    window.localStorage.setItem(
+      GLOOBAL_SESSION_KEY,
+      JSON.stringify(
+        Object.assign({}, parsed, {
+          user: Object.assign({}, parsed.user, { symbolId: newSymbolId }),
+          savedAt: Date.now()
+        })
+      )
+    );
+  } catch (e) {
+    // Storage unavailable. The in-memory React state still carries the new
+    // ID for this session; only persistence across a reload is lost.
+  }
+  gloobalNotifySymbolIdChanged(newSymbolId);
+}
+
+function gloobalNotifySymbolIdChanged(newSymbolId) {
+  try {
+    window.dispatchEvent(new CustomEvent(GLOOBAL_SYMBOL_ID_EVENT, { detail: { symbolId: newSymbolId } }));
+  } catch (e) {
+    // No window (SSR probes) or no CustomEvent — nothing is listening
+    // there either, so there is nothing to fall back to.
+  }
+}
+
 function gloobalSessionClear() {
   try {
     window.localStorage.removeItem(GLOOBAL_SESSION_KEY);

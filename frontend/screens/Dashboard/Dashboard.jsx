@@ -519,12 +519,26 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const toggleSubscription = (key) => setSubscriptions((subs) => subs.map((s) => s.key === key ? { ...s, active: !s.active } : s));
   const balance = fmt(bankBalance);
   const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
+  // THE account's Gloobal ID — the one and only value any screen on this
+  // dashboard shows as "your Gloobal ID". It comes from the stored
+  // session via useCurrentSymbolId, which re-renders on
+  // gloobal:symbolIdChanged, so a rename reaches every screen at once.
+  //
+  // The myGloobalId prop is a fallback, not the source: during
+  // registration the session is not written until the biometric step, so
+  // for those few screens the prop is all there is.
+  //
+  // This replaces a scheme where each screen picked its own answer —
+  // Receive/share read the local `gloobalIdOverride`, Personal Details and
+  // the profile header read the raw prop — which is why the same account
+  // showed different IDs depending on where you looked.
+  const currentSymbolId = useCurrentSymbolId(myGloobalId);
+  const personalGloobalId = gloobalIdOverride || (currentSymbolId && currentSymbolId.length === 12 ? currentSymbolId : "++++++++++++");
   // Same real code the Scan screen's "My Code" tab shows for the same
-  // role — Personal shares myGloobalId, Creator shares creatorId, so
-  // "my code" never differs depending on which screen you're looking
-  // at. gloobalIdOverride (ID regeneration) always wins when set,
-  // regardless of role, since it replaces the Personal ID specifically.
-  const shareableGloobalId = shareRole === "merchant" ? creatorId : gloobalIdOverride || (myGloobalId && myGloobalId.length === 12 ? myGloobalId : "++++++++++++");
+  // role. Creator mode deliberately shares a different identifier
+  // (creatorId): scanning the two means different things, so this is the
+  // one place the displayed ID is legitimately not the personal one.
+  const shareableGloobalId = shareRole === "merchant" ? creatorId : personalGloobalId;
   const gloobalIdTag = shareableGloobalId;
   const referralLink = `https://gloobal.id/r/${shareableGloobalId}`;
   const ghCategoryScore = (catKey) => {
@@ -577,13 +591,13 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const saveNewGloobalId = async () => {
     if (newIdBuffer.length !== 12) return;
     const previousId = shareableGloobalId;
-    const isBackedByAccount = shareRole !== "merchant" && myGloobalId && myGloobalId.length === 12;
+    const isBackedByAccount = shareRole !== "merchant" && (currentSymbolId || myGloobalId || "").length === 12;
     if (isBackedByAccount) {
       try {
         // The ID the backend knows this account by — not shareableGloobalId,
         // which is a display value that can already carry a local override.
         // Sending the display value would 404 the moment the two differ.
-        await GloobalApi.changeSymbolId(myGloobalId, newIdBuffer);
+        await GloobalApi.changeSymbolId(currentSymbolId || myGloobalId, newIdBuffer);
       } catch (err) {
         showToast2(err.message || "Couldn't update your Gloobal ID");
         return;
@@ -1222,7 +1236,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       cursor: "pointer",
       width: "100%"
     }}
-  ><IdSymbolDots id={myGloobalId || "++++++++++++"} revealed oneLine /></button></div></div><div style={{ borderRadius: T.radiusLg, overflow: "hidden", boxShadow: T.shadowCard, display: "flex", flexDirection: "column", gap: 2 }}>{PROFILE_ROWS.map((label, i) => {
+  ><IdSymbolDots id={personalGloobalId} revealed oneLine /></button></div></div><div style={{ borderRadius: T.radiusLg, overflow: "hidden", boxShadow: T.shadowCard, display: "flex", flexDirection: "column", gap: 2 }}>{PROFILE_ROWS.map((label, i) => {
     const rowColor = POSITION_COLORS[i % POSITION_COLORS.length];
     return <button
       key={label}
@@ -1814,7 +1828,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        Accounts. "Interested" just flips a local flag and shows a
        toast, standing in for what would be a real signup/waitlist
        call that gives the business a signal of demand. */
-  }{showGloobalBankInfo && <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
+  }{showGloobalBankInfo && <ScreenErrorBoundary name="Gloobal Bank" onClose={requestCloseGloobalBankInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseGloobalBankInfo}
     aria-label="Back"
     className="v2-tap"
@@ -1927,7 +1941,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   ].map((item, i) => <div
     key={item.label}
     style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div>}{showGloobalCoinInfo && <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
+  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div></ScreenErrorBoundary>}{showGloobalCoinInfo && <ScreenErrorBoundary name="Gloobal Coin" onClose={requestCloseGloobalCoinInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseGloobalCoinInfo}
     aria-label="Back"
     className="v2-tap"
@@ -2037,7 +2051,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   ].map((item, i) => <div
     key={item.label}
     style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div>}{
+  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div></ScreenErrorBoundary>}{
     /* Real interest data — genuinely just this one account, not a
        fabricated global figure. 1 of 1 active users, 100% or 0%
        depending on whether this account itself has tapped "I am IN".
@@ -2067,7 +2081,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        mission line, a real feature list (not fabricated
        numbers), then the same Version/Terms/Privacy rows and
        support email already used on the profile About screen. */
-  }{showAboutUs && <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
+  }{showAboutUs && <ScreenErrorBoundary name="About Us" onClose={requestCloseAboutUs}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseAboutUs}
     aria-label="Back"
     className="v2-tap"
@@ -2118,7 +2132,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     onClick={() => showToast2(`${label} coming soon`)}
     className="v2-row"
     style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
-  ><span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{label}</span><ChevronRightIcon /></button>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}><div style={{ fontSize: 12, color: T.inkFaint }}>Get in touch</div><div style={{ fontSize: 13.5, fontWeight: 700, color: T.accent, marginTop: 2 }}>support@gloobal.id</div></div></div></div>}{showAssets && <AssetsScreen
+  ><span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{label}</span><ChevronRightIcon /></button>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}><div style={{ fontSize: 12, color: T.inkFaint }}>Get in touch</div><div style={{ fontSize: 13.5, fontWeight: 700, color: T.accent, marginTop: 2 }}>support@gloobal.id</div></div></div></div></ScreenErrorBoundary>}{showAssets && <AssetsScreen
     onClose={requestCloseAssets}
     ccy={ccy}
     assetRows={assetRows}
@@ -2234,7 +2248,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   ].map(([k, v], i) => <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}><span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}>{k}</span><span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span></div>)}{
     /* Gloobal ID — colored per character, same as everywhere
        else the ID itself is shown. */
-  }<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}><span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}><GloobalWordmark suffix=" ID" /></span><span style={{ fontSize: 13, fontWeight: 700, textAlign: "right" }}>{myGloobalId ? <ColoredGloobalId id={myGloobalId} /> : "\u2014"}</span></div>{
+  }<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}><span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}><GloobalWordmark suffix=" ID" /></span><span style={{ fontSize: 13, fontWeight: 700, textAlign: "right" }}>{personalGloobalId ? <ColoredGloobalId id={personalGloobalId} /> : "\u2014"}</span></div>{
     /* Join date + time — the real moment this session
        actually started, not a fixed placeholder year. */
   }<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}><span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}>Joined</span><span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "right" }}>{accountCreatedAt.toLocaleDateString(void 0, { month: "short", day: "numeric", year: "numeric" })}, {formatClockTime(accountCreatedAt)}</span></div></div>}{profileDetail === "Linked Banks" && <div style={{ display: "flex", flexDirection: "column", gap: 14 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "18px" }}><div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Manage your linked banks</div><div style={{ fontSize: 12, color: T.inkFaint, marginTop: 3, lineHeight: 1.5 }}>

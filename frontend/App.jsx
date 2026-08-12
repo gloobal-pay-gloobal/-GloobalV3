@@ -1043,6 +1043,13 @@ function GloobalId() {
     setRegisteredUser(updatedUser);
     setSecureId(newSymbolId);
     GloobalApi.saveSession(updatedUser, phoneNumber);
+    // Writes the new ID into the stored session — the single source every
+    // screen reads through useCurrentSymbolId — and fires
+    // gloobal:symbolIdChanged so anything already on screen re-renders
+    // with it. Without the event the Receive QR, the share card, Personal
+    // Details and the referral link would each keep whatever they last
+    // rendered until a reload.
+    gloobalSessionSetSymbolId(newSymbolId);
     gloobalSetBiometricSymbolId(newSymbolId);
     // Re-keyed rather than moved: the name and photo are looked up by
     // Gloobal ID, so under the old key they would simply stop being found.

@@ -108,6 +108,10 @@ const FRONTEND_MODULES = [
   // any of them. It builds on the backend's session store and API client
   // (both already emitted above, from BACKEND_MODULES).
   "hooks/useBiometric.js",
+  // The single source of truth for the current Gloobal ID. Every screen
+  // that displays one reads it through this, so it is defined ahead of all
+  // of them.
+  "hooks/useCurrentSymbolId.js",
   // Early: it wraps the full-screen views, so it must be defined before
   // anything that renders one.
   "components/common/ScreenErrorBoundary.jsx",
