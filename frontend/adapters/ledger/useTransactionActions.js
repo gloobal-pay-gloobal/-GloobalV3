@@ -30,6 +30,12 @@ function useTransactionActions() {
   // scanAndPay either. Asset seeds are created in exactly one place —
   // inside executeTransaction(), on a real, first-time completion, and
   // there is deliberately no direct UI passthrough that skips it.
-  return { executeTransaction, settleEssentialsToBank, settleReferralToBank, applyEssentialsPoolSubsidy };
+  // Aligns the local bank balance with what the server says the account
+  // holds. Not a transaction — it posts a reconciliation entry (see
+  // reconcileBankBalance in FinancialCore) so the figure the dashboard
+  // shows, and the figure executeTransaction's risk check reads, are the
+  // account's real balance rather than a local opening float.
+  const reconcileBankBalance = useCallback2((serverBalance) => core.reconcileBankBalance(serverBalance), [core]);
+  return { executeTransaction, settleEssentialsToBank, settleReferralToBank, applyEssentialsPoolSubsidy, reconcileBankBalance };
 }
 

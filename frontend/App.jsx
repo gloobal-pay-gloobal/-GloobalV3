@@ -195,6 +195,12 @@ function GloobalId() {
         // makes the dedup explicit rather than time-based.
         idempotencyKey: clientRequestId || ""
       });
+      // The server just moved money, so its balance is now ahead of the
+      // local ledger's own view of the same payment. Re-read and reconcile
+      // rather than assuming the two arrived at the same number: the
+      // backend also withholds cashback and can apply its own adjustments
+      // this client never sees.
+      setRefreshBalanceToken((n) => n + 1);
       return { ok: true };
     } catch (err) {
       return { ok: false, reason: err.message };
@@ -202,7 +208,7 @@ function GloobalId() {
   };
   const handleReportTransactionIssue = (txnId, reason) => openComplaint({ txnId, raisedBy: "sender", reason });
   const bankBalance = useBankBalance();
-  const { executeTransaction, settleEssentialsToBank, settleReferralToBank, applyEssentialsPoolSubsidy } = useTransactionActions();
+  const { executeTransaction, settleEssentialsToBank, settleReferralToBank, applyEssentialsPoolSubsidy, reconcileBankBalance } = useTransactionActions();
   const [usedQrCodes, setUsedQrCodes] = useState19(() => /* @__PURE__ */ new Set());
   const [showScanScreen, setShowScanScreen] = useState19(false);
   // Backdrop color behind the QR/scan area — same "pick one random
@@ -576,6 +582,49 @@ function GloobalId() {
   // A failure is silent by design. History is a read: the dashboard is
   // fully usable without it, and an error banner over a working screen
   // because a list is a few seconds late helps nobody.
+  // The account's real balance, pulled from the server and reconciled into
+  // the local ledger.
+  //
+  // These were unrelated numbers: the ledger opened at a fixed 5,000 and
+  // tracked only this browser session, while POST /api/transactions/send
+  // debited the balance MongoDB holds. The dashboard could show 5,000 for
+  // an account the server knew was empty — and since the local figure is
+  // what executeTransaction's risk check reads, spending was authorised
+  // against a number the backend did not share.
+  //
+  // GET /api/profile/:symbolId is the read (publicUserPayload carries
+  // `balance`), and reconcileBankBalance posts the difference as a real
+  // double-entry adjustment rather than assigning to a derived value.
+  //
+  // `refreshBalanceToken` re-runs it: it is bumped after every successful
+  // remote send, because that send changed the server's number and the
+  // local ledger has only applied its own view of the same event.
+  const [refreshBalanceToken, setRefreshBalanceToken] = useState19(0);
+  useEffect15(() => {
+    if (stage !== "dashboard") return;
+    const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
+    if (!symbolId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await GloobalApi.getProfile(symbolId);
+        if (cancelled) return;
+        // Passed through as-is rather than coerced here: reconcileBankBalance
+        // is the one place that decides what counts as a real balance, and
+        // Number(null) === 0 would otherwise sneak a "zero the account"
+        // past this guard. It no-ops on anything that is not a number.
+        if (profile) reconcileBankBalance(profile.balance);
+      } catch (e) {
+        // Unreachable or 404. The local ledger keeps whatever it had —
+        // stale is better than blanking someone's balance because a read
+        // timed out on a cold start.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stage, registeredUser, refreshBalanceToken]);
+
   useEffect15(() => {
     if (stage !== "dashboard") return;
     const symbolId = (registeredUser && registeredUser.symbolId) || secureId;

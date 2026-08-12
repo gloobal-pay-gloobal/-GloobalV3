@@ -39,6 +39,53 @@ function createFinancialCore({ userId = "demo-user", currency = "INR", openingBa
       meta: { kind: "opening-balance" }
     });
   }
+  // Bring the local bank balance in line with the account's real balance
+  // on the server.
+  //
+  // The two used to be unrelated: this ledger opened at a fixed 5,000 and
+  // tracked only what happened in this browser session, while
+  // POST /api/transactions/send debited the balance MongoDB holds. So the
+  // dashboard could show 5,000 to an account the server knew was empty —
+  // and, worse, the local figure is what executeTransaction's risk check
+  // reads, so spending decisions were made against a number the backend
+  // did not share.
+  //
+  // Reconciling by posting rather than by assignment is deliberate. This
+  // is a double-entry ledger; a balance is derived from entries, not
+  // stored, so there is nothing to assign. The adjustment uses the same
+  // account pair the opening balance uses (bank against reserve), which is
+  // what makes it a legitimate entry rather than a hole in the books, and
+  // it stays visible in the ledger as its own memo.
+  //
+  // Returns the delta applied, or 0 when already in sync — callers can
+  // fire this on every refresh without it doing anything when nothing
+  // changed.
+  function reconcileBankBalance(serverBalance) {
+    // Only a genuine number counts. Coercing first would be a trap:
+    // Number(null), Number("") and Number([]) are all 0 — finite,
+    // non-negative, and indistinguishable from a real zero balance — so a
+    // response with `balance` missing or null would wipe the account's
+    // balance to nothing and post an entry saying the server asked for it.
+    const isNumeric =
+      typeof serverBalance === "number" ||
+      (typeof serverBalance === "string" && serverBalance.trim() !== "" && Number.isFinite(Number(serverBalance)));
+    if (!isNumeric) return 0;
+    const target = Number(serverBalance);
+    if (!Number.isFinite(target) || target < 0) return 0;
+    const current = ledgerEngine.getAccountBalance(userAccounts.bank.id, currency).amount;
+    const delta = Number((target - current).toFixed(2));
+    if (delta === 0) return 0;
+    const magnitude = Money.of(Math.abs(delta), currency);
+    ledgerEngine.postJournalEntry({
+      memo: "Balance reconciled with Gloobal server",
+      lines:
+        delta > 0
+          ? [DebitEntry(userAccounts.bank.id, magnitude), CreditEntry(registry.reserve.id, magnitude)]
+          : [DebitEntry(registry.reserve.id, magnitude), CreditEntry(userAccounts.bank.id, magnitude)],
+      meta: { kind: "server-reconciliation", serverBalance: target, delta }
+    });
+    return delta;
+  }
   bus.emit(DomainEvent.CORE_INITIALIZED, { userId, currency, openingBankBalance });
   return {
     store,
@@ -58,6 +105,7 @@ function createFinancialCore({ userId = "demo-user", currency = "INR", openingBa
     disputeStore,
     disputeService,
     idempotencyGuard,
+    reconcileBankBalance,
     currency,
     eventBus: bus,
     logger
