@@ -142,9 +142,19 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   // — this one is "has it EVER been opened", set once and never unset.
   const [hasOpenedGloobalBank, setHasOpenedGloobalBank] = useState14(false);
   const capabilities = useMemo5(() => deriveCapabilityStates({ hasOpenedGloobalBank }), [hasOpenedGloobalBank]);
+  // Both product screens fetch their own catalogue on open rather than on
+  // mount: the rows are only ever looked at here, and this backend sleeps,
+  // so there is no reason to spend a cold start warming a list nobody has
+  // asked for yet. loadProduct is defined further down; these are only
+  // called from a tap, long after it exists.
   const openGloobalBankInfo = () => {
+    loadProduct("bank");
     setHasOpenedGloobalBank(true);
     setShowGloobalBankInfo(true);
+  };
+  const openGloobalCoinInfo = () => {
+    loadProduct("coin");
+    setShowGloobalCoinInfo(true);
   };
   const [gloobalBankInterested, setGloobalBankInterested] = useState14(false);
   const [showGloobalCoinInfo, setShowGloobalCoinInfo] = useState14(false);
@@ -772,9 +782,35 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     Instant: Zap3,
     Backed: Landmark5
   };
+  // Rows as the server holds them, keyed by product ("bank" | "coin").
+  // null means "not loaded / server didn't answer", which is what makes
+  // the bundled table a fallback rather than dead code.
+  const [productCatalogue, setProductCatalogue] = useState14({ bank: null, coin: null });
+  const loadProduct = async (product) => {
+    const loaded = await GloobalApi.getProduct(product);
+    if (loaded) setProductCatalogue((prev) => ({ ...prev, [product]: loaded }));
+  };
+  // Server first, bundled table second.
+  //
+  // The fallback is not a nicety: this backend sleeps and takes 20-50s to
+  // wake, so a screen opened cold would otherwise render an empty services
+  // list — which reads as "this product does nothing" rather than "we
+  // haven't heard back yet". The bundled copy is the same starting state
+  // the database was seeded from, so a stale render is out of date at
+  // worst, never wrong about which product it belongs to.
+  //
+  // Server rows arrive already downgraded for a product that isn't live
+  // (the route applies that before answering), and deriveProductServices
+  // applies the identical rule to the bundled rows, so both paths agree.
+  const serviceRowsFor = (capabilityKey) => {
+    const product = capabilityKey === CAPABILITY_KEY.GLOOBAL_BANK ? "bank" : "coin";
+    const fromServer = productCatalogue[product];
+    if (fromServer) return fromServer.services;
+    return deriveProductServices(capabilityKey, capabilities);
+  };
   // One renderer for both screens, so Bank and Coin cannot drift into
   // showing the same status two different ways.
-  const renderServiceRows = (capabilityKey) => deriveProductServices(capabilityKey, capabilities).map((item, i) => {
+  const renderServiceRows = (capabilityKey) => serviceRowsFor(capabilityKey).map((item, i) => {
     const Icon = SERVICE_ICONS[item.label] || Shield3;
     const live = item.status === "live";
     return <div
@@ -1078,7 +1114,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     className="v2-tap"
     style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: "none", borderRadius: T.radiusMd, padding: "12px 0", color: "#fff", fontSize: 12.5, fontWeight: 800, background: todaysCollection > 0 ? T.gradButton : T.gradButtonDisabled, cursor: todaysCollection > 0 ? "pointer" : "not-allowed", opacity: todaysCollection > 0 ? 1 : 0.6 }}
   ><Landmark3 size={13} color="#fff" />Bank</button><button
-    onClick={() => setShowGloobalCoinInfo(true)}
+    onClick={openGloobalCoinInfo}
     className="v2-tap"
     style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1.5px solid ${T.line}`, borderRadius: T.radiusMd, padding: "12px 0", color: T.ink, fontSize: 12.5, fontWeight: 800, background: T.surface, cursor: "pointer" }}
   ><Coins2 size={13} color={T.ink} />Coin</button></div></div>{
@@ -1132,7 +1168,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        already covers it. */
   }<div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, justifyItems: "center" }}>{[
     { key: "gbank", label: "Gloobal Bank", displayLabel: <GloobalWordmark suffix=" Bank" />, onClick: openGloobalBankInfo },
-    { key: "gcoin", label: "Gloobal Coin", displayLabel: <GloobalWordmark suffix=" Coin" />, onClick: () => setShowGloobalCoinInfo(true) },
+    { key: "gcoin", label: "Gloobal Coin", displayLabel: <GloobalWordmark suffix=" Coin" />, onClick: openGloobalCoinInfo },
     { key: "gpaylater", label: "PayLater", onClick: () => setShowPayLater(true) },
     { key: "myassets", label: "My Assets", onClick: () => setShowAssets(true) },
     {

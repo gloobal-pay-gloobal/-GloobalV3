@@ -306,6 +306,38 @@ var GloobalApi = {
     }
   },
 
+  // --- Product catalogue -------------------------------------------------
+
+  // GET /api/products/:product → { live, services } — the "Our Services"
+  // rows and whether the product works at all, both editable in the
+  // database rather than shipped in this bundle.
+  //
+  // Returns null when the server can't answer. The caller falls back to
+  // the bundled table (see PRODUCT_SERVICES in CapabilityState.js): Render
+  // sleeps and takes 20-50s to wake, and a services list that renders
+  // nothing during that is worse than one showing a slightly stale status.
+  // The rows come back already downgraded for a product that isn't live,
+  // so the fallback path and this one agree without the screen re-deriving
+  // anything.
+  async getProduct(product) {
+    try {
+      const result = await gloobalApiClient.get(`/api/products/${encodeURIComponent(product)}`, {
+        timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
+      });
+      if (!result || !Array.isArray(result.services) || result.services.length === 0) return null;
+      return {
+        live: Boolean(result.live),
+        services: result.services.map((row) => ({
+          label: String(row.label || ""),
+          status: row.status === "live" ? "live" : "planned",
+          note: String(row.note || "")
+        })).filter((row) => row.label)
+      };
+    } catch (e) {
+      return null;
+    }
+  },
+
   // --- Product interest ("I am IN") -------------------------------------
   //
   // What the Gloobal Bank and Gloobal Coin screens are for. `product` is
