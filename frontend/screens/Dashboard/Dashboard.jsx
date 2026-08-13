@@ -759,6 +759,29 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       setInterestBusy(null);
     }
   };
+  // "Our Services" rows for the Bank and Coin screens. The labels, their
+  // status and the reason each one carries all come from
+  // deriveProductServices (see CapabilityState.js); the icon is the only
+  // thing that belongs to the view, so it is the only thing mapped here.
+  const SERVICE_ICONS = {
+    Cashless: CreditCard3,
+    Borderless: Globe22,
+    Taxless: Shield3,
+    Limitless: TrendingUp2,
+    Stable: Shield3,
+    Instant: Zap3,
+    Backed: Landmark5
+  };
+  // One renderer for both screens, so Bank and Coin cannot drift into
+  // showing the same status two different ways.
+  const renderServiceRows = (capabilityKey) => deriveProductServices(capabilityKey, capabilities).map((item, i) => {
+    const Icon = SERVICE_ICONS[item.label] || Shield3;
+    const live = item.status === "live";
+    return <div
+      key={item.label}
+      style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
+    ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: live ? T.accentSoft : T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon size={17} color={live ? T.accent : T.inkFaint} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: live ? T.ink : T.inkSoft }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span>{live ? <Check2 size={17} color={T.positive} style={{ flexShrink: 0 }} /> : <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.inkFaint, background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 999, padding: "4px 9px" }}>Planned</span>}</div>;
+  });
   const totalReferralEarned = referralNetwork.reduce((sum, m) => sum + m.earned, 0);
   const [showSettleReferralBiometric, setShowSettleReferralBiometric] = useState14(false);
   const [settleReferralBiometricScanning, setSettleReferralBiometricScanning] = useState14(false);
@@ -1726,10 +1749,13 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     open={payTargetOptionsOpen}
     onClose={() => setPayTargetOptionsOpen(false)}
     onChoose={(label) => {
-      if (label === "Gloobal Coin") {
+      // Whether Coin works is one fact, held in deriveCapabilityStates.
+      // This used to assert it independently, which is how Coin ended up
+      // "not live" here and fully ticked on its own screen at the same time.
+      if (label === "Gloobal Coin" && !capabilities.gcoin.live) {
         showToast2("Gloobal Coin isn't live yet \u2014 paying via Gloobal Bank instead");
       }
-      setPayTargetMethod(label === "Gloobal Coin" ? null : label);
+      setPayTargetMethod(label === "Gloobal Coin" && !capabilities.gcoin.live ? null : label);
       setPayTargetOptionsOpen(false);
       setPayTargetPinOpen(true);
     }}
@@ -2071,15 +2097,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     }}
   >
                 Our Services
-              </span>{[
-    { label: "Cashless", icon: CreditCard3 },
-    { label: "Taxless", icon: Shield3 },
-    { label: "Borderless", icon: Globe22 },
-    { label: "Limitless", icon: TrendingUp2 }
-  ].map((item, i) => <div
-    key={item.label}
-    style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div></ScreenErrorBoundary>}{showGloobalCoinInfo && <ScreenErrorBoundary name="Gloobal Coin" onClose={requestCloseGloobalCoinInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
+              </span>{renderServiceRows(CAPABILITY_KEY.GLOOBAL_BANK)}</div></div></div></ScreenErrorBoundary>}{showGloobalCoinInfo && <ScreenErrorBoundary name="Gloobal Coin" onClose={requestCloseGloobalCoinInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseGloobalCoinInfo}
     aria-label="Back"
     className="v2-tap"
@@ -2180,15 +2198,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     }}
   >
                 Our Services
-              </span>{[
-    { label: "Stable", icon: Shield3 },
-    { label: "Instant", icon: Zap3 },
-    { label: "Borderless", icon: Globe22 },
-    { label: "Backed", icon: Landmark5 }
-  ].map((item, i) => <div
-    key={item.label}
-    style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div></ScreenErrorBoundary>}{
+              </span>{renderServiceRows(CAPABILITY_KEY.GLOOBAL_COIN)}</div></div></div></ScreenErrorBoundary>}{
     /* Real interest data, counted server-side. Both numbers used to be
        written into the JSX — `interested ? 100 : 0`% and
        `interested ? 1 : 0` of a hardcoded "1 active user" — so this

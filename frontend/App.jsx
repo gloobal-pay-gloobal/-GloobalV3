@@ -2243,10 +2243,14 @@ function GloobalId() {
     open={scanPayOptionsOpen}
     onClose={() => setScanPayOptionsOpen(false)}
     onChoose={(label) => {
-      if (label === "Gloobal Coin") {
+      // Same single fact as the Dashboard's own pay sheet \u2014 see
+      // deriveCapabilityStates. Asserted here independently before, which
+      // is how "Coin isn't live" and Coin's four ticked services coexisted.
+      const coinLive = deriveCapabilityStates({ hasOpenedGloobalBank: true }).gcoin.live;
+      if (label === "Gloobal Coin" && !coinLive) {
         showToast("Gloobal Coin isn't live yet \u2014 paying via Gloobal Bank instead");
       }
-      setScanPayMethod(label === "Gloobal Coin" ? null : label);
+      setScanPayMethod(label === "Gloobal Coin" && !coinLive ? null : label);
       setScanPayOptionsOpen(false);
       setScanPayPinOpen(true);
     }}
