@@ -156,6 +156,16 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const requestCloseGloobalBankStats = useBackClose(showGloobalBankStats, () => setShowGloobalBankStats(false));
   const [showGloobalCoinStats, setShowGloobalCoinStats] = useState14(false);
   const requestCloseGloobalCoinStats = useBackClose(showGloobalCoinStats, () => setShowGloobalCoinStats(false));
+  // Interest in Gloobal Bank / Gloobal Coin — the one thing those two
+  // screens exist to collect, and until now the one thing they did not.
+  // The state lives here beside the screens' other flags; the effect and
+  // handlers that drive it sit further down, after currentSymbolId exists.
+  //
+  // `interestCounts` holds the real { total, totalUsers } per product, or
+  // null while unknown — null renders as ∆, the same "we don't have that
+  // figure" mark Coverage uses, rather than a confident 0.
+  const [interestCounts, setInterestCounts] = useState14({ bank: null, coin: null });
+  const [interestBusy, setInterestBusy] = useState14(null);
   const [bankHeroColor, setBankHeroColor] = useState14(() => randomLogoFlipColor());
   const [coinHeroColor, setCoinHeroColor] = useState14(() => randomLogoFlipColor());
   const [paylaterHeroColor, setPaylaterHeroColor] = useState14(() => randomLogoFlipColor());
@@ -678,6 +688,77 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       cancelled = true;
     };
   }, [currentSymbolId]);
+  // "I am IN", made real. Both flags used to be plain useState(false): the
+  // button lit up, the next reload forgot it, and nothing was ever sent
+  // anywhere. The counter beside them was worse — `interested ? 1 : 0` out
+  // of a hardcoded "1 active user", a platform statistic with no platform
+  // behind it.
+  //
+  // This restores the flag from the server, so "You're on the list"
+  // survives a reload and shows up on any other device this person signs
+  // in on. Placed here rather than with the state above because it needs
+  // currentSymbolId, which is declared further up this component.
+  useEffect12(() => {
+    if (!currentSymbolId) return;
+    let cancelled = false;
+    (async () => {
+      const products = await GloobalApi.getInterestStatus(currentSymbolId);
+      if (cancelled) return;
+      if (products.includes("bank")) setGloobalBankInterested(true);
+      if (products.includes("coin")) setGloobalCoinInterested(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSymbolId]);
+  // Counts are read when a screen showing one is opened, not on mount —
+  // no reason to spend a cold start on a number nobody is looking at yet.
+  const loadInterestCount = async (product) => {
+    const counts = await GloobalApi.getInterest(product);
+    setInterestCounts((prev) => ({ ...prev, [product]: counts }));
+  };
+  // Both stats panels render the same two figures, so the arithmetic and
+  // the wording live in one place rather than being written twice and
+  // drifting. Returns null when the server hasn't answered — the panels
+  // show ∆ for that, never a 0 that would read as "nobody wants this".
+  const interestSummary = (product) => {
+    const counts = interestCounts[product];
+    if (!counts) return null;
+    const { total, totalUsers } = counts;
+    return {
+      percent: totalUsers > 0 ? Math.round((total / totalUsers) * 100) : 0,
+      caption: `${total} of ${totalUsers} ${totalUsers === 1 ? "registered account has" : "registered accounts have"} shown interest`
+    };
+  };
+  // The "I am IN" handler for both screens. The flip to "You're on the
+  // list" happens only after the server has accepted: this button is the
+  // entire feature, and confirming a registration that failed would be the
+  // same lie in a friendlier colour. The route is idempotent, so a second
+  // tap — or a tap from another device — is safe rather than double-counted.
+  const registerInterest = async (product) => {
+    if (interestBusy) return;
+    if (product === "bank" ? gloobalBankInterested : gloobalCoinInterested) return;
+    if (!currentSymbolId) {
+      showToast2("Finish setting up your Gloobal ID first.");
+      return;
+    }
+    setInterestBusy(product);
+    try {
+      const result = await GloobalApi.registerInterest(currentSymbolId, product);
+      if (product === "bank") setGloobalBankInterested(true);
+      else setGloobalCoinInterested(true);
+      setInterestCounts((prev) => ({ ...prev, [product]: { total: result.total, totalUsers: result.totalUsers } }));
+      showToast2(
+        result.alreadyRegistered
+          ? "You're already on the list."
+          : "\u{1F389} Congratulations — you're in! Thanks for showing your interest."
+      );
+    } catch (err) {
+      showToast2(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+    } finally {
+      setInterestBusy(null);
+    }
+  };
   const totalReferralEarned = referralNetwork.reduce((sum, m) => sum + m.earned, 0);
   const [showSettleReferralBiometric, setShowSettleReferralBiometric] = useState14(false);
   const [settleReferralBiometricScanning, setSettleReferralBiometricScanning] = useState14(false);
@@ -1898,7 +1979,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        backend exists, this same icon just starts opening real
        active-user and interest data. */
   }<button
-    onClick={() => setShowGloobalBankStats(true)}
+    onClick={() => {
+      loadInterestCount("bank");
+      setShowGloobalBankStats(true);
+    }}
     aria-label="Interest stats"
     className="v2-tap"
     style={{
@@ -1950,12 +2034,8 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       textAlign: "center"
     }}
   ><span style={{ position: "absolute", top: 10, right: 10, zIndex: 1 }}><GH2HFlipCircle size={22} /></span><span style={{ marginBottom: 4 }}><ZeroPercentMark size={38} color={bankHeroColor} /></span><span style={{ fontSize: 14.5, color: T.ink }}><HoomanMark /></span></div><button
-    onClick={() => {
-      if (gloobalBankInterested) return;
-      setGloobalBankInterested(true);
-      showToast2("\u{1F389} Congratulations \u2014 you're in! Thanks for showing your interest.");
-    }}
-    disabled={gloobalBankInterested}
+    onClick={() => registerInterest("bank")}
+    disabled={gloobalBankInterested || interestBusy === "bank"}
     className="v2-tap"
     style={{
       width: "100%",
@@ -1974,7 +2054,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       gap: 8
     }}
   >{gloobalBankInterested ? <><Check2 size={16} /> You're on the list
-                </> : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
+                </> : interestBusy === "bank" ? "Adding you…" : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
     style={{
       position: "absolute",
       top: 0,
@@ -2008,7 +2088,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     /* Same real (not fake) indicator as Gloobal Bank's — one
        real active account, genuinely 100% or 0% interested. */
   }<button
-    onClick={() => setShowGloobalCoinStats(true)}
+    onClick={() => {
+      loadInterestCount("coin");
+      setShowGloobalCoinStats(true);
+    }}
     aria-label="Interest stats"
     className="v2-tap"
     style={{
@@ -2060,12 +2143,8 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       textAlign: "center"
     }}
   ><span style={{ position: "absolute", top: 10, right: 10, zIndex: 1 }}><GH2HFlipCircle size={22} /></span><span style={{ marginBottom: 4 }}><ZeroPercentMark size={38} color={coinHeroColor} /></span><span style={{ fontSize: 14.5, color: T.ink }}><HoomanMark /></span></div><button
-    onClick={() => {
-      if (gloobalCoinInterested) return;
-      setGloobalCoinInterested(true);
-      showToast2("\u{1F389} Congratulations \u2014 you're in! Thanks for showing your interest.");
-    }}
-    disabled={gloobalCoinInterested}
+    onClick={() => registerInterest("coin")}
+    disabled={gloobalCoinInterested || interestBusy === "coin"}
     className="v2-tap"
     style={{
       width: "100%",
@@ -2084,7 +2163,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       gap: 8
     }}
   >{gloobalCoinInterested ? <><Check2 size={16} /> You're on the list
-                </> : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
+                </> : interestBusy === "coin" ? "Adding you…" : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
     style={{
       position: "absolute",
       top: 0,
@@ -2110,29 +2189,29 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     key={item.label}
     style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
   ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><Check2 size={17} color={T.positive} style={{ marginLeft: "auto" }} /></div>)}</div></div></div></ScreenErrorBoundary>}{
-    /* Real interest data — genuinely just this one account, not a
-       fabricated global figure. 1 of 1 active users, 100% or 0%
-       depending on whether this account itself has tapped "I am IN".
-       Wired so a future real backend only needs to swap where these
-       two numbers come from, not the screen itself. */
+    /* Real interest data, counted server-side. Both numbers used to be
+       written into the JSX — `interested ? 100 : 0`% and
+       `interested ? 1 : 0` of a hardcoded "1 active user" — so this
+       screen reported on nobody but the person reading it. They now
+       come from GET /api/interest/:product, which counts the Interest
+       collection against User.countDocuments(). ∆ while the server
+       hasn't answered: a 0 here would read as "nobody wants this",
+       which is a different claim from "we don't know yet". */
   }{showGloobalBankStats && <div style={{ position: "fixed", inset: 0, zIndex: 340, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseGloobalBankStats}
     aria-label="Back"
     className="v2-tap"
     style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Interest so far</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "26px 20px", textAlign: "center" }}><div style={{ fontSize: 44, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay }}>{gloobalBankInterested ? 100 : 0}%
-              </div><div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6 }}>{gloobalBankInterested ? 1 : 0} of 1 active user has shown interest
-              </div></div><div style={{ fontSize: 11, color: T.inkFaint, textAlign: "center", lineHeight: 1.4 }}>
-              This is the real number — there's only one real active account in this prototype right now, so it's genuinely 1 of 1, not a placeholder. Once a real backend exists, this same screen shows the real total instead.
+  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Interest so far</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "26px 20px", textAlign: "center" }}><div style={{ fontSize: 44, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay }}>{interestSummary("bank") ? `${interestSummary("bank").percent}%` : "∆"}</div><div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6 }}>{interestSummary("bank")?.caption || "Couldn't load the count — reopen this screen to try again."}</div></div><div style={{ fontSize: 11, color: T.inkFaint, textAlign: "center", lineHeight: 1.4 }}>
+              Counted on the server: every account that has tapped “I am IN”, against every account registered. ∆ means the figure couldn’t be loaded, not that it is zero.
             </div></div></div>}{showGloobalCoinStats && <div style={{ position: "fixed", inset: 0, zIndex: 340, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={requestCloseGloobalCoinStats}
     aria-label="Back"
     className="v2-tap"
     style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Interest so far</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "26px 20px", textAlign: "center" }}><div style={{ fontSize: 44, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay }}>{gloobalCoinInterested ? 100 : 0}%
-              </div><div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6 }}>{gloobalCoinInterested ? 1 : 0} of 1 active user has shown interest
+  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Interest so far</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "26px 20px", textAlign: "center" }}><div style={{ fontSize: 44, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay }}>{interestSummary("coin") ? `${interestSummary("coin").percent}%` : "∆"}</div><div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 6 }}>{interestSummary("coin")?.caption || "Couldn't load the count — reopen this screen to try again."}
               </div></div><div style={{ fontSize: 11, color: T.inkFaint, textAlign: "center", lineHeight: 1.4 }}>
-              This is the real number — there's only one real active account in this prototype right now, so it's genuinely 1 of 1, not a placeholder. Once a real backend exists, this same screen shows the real total instead.
+              Counted on the server: every account that has tapped “I am IN”, against every account registered. ∆ means the figure couldn’t be loaded, not that it is zero.
             </div></div></div>}{
     /* About Us — same header/hero pattern as the Bank and Coin
        info screens: colored circle behind the logo, a short

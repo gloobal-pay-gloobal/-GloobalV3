@@ -306,6 +306,63 @@ var GloobalApi = {
     }
   },
 
+  // --- Product interest ("I am IN") -------------------------------------
+  //
+  // What the Gloobal Bank and Gloobal Coin screens are for. `product` is
+  // "bank" | "coin".
+
+  // POST /api/interest — idempotent server-side, so the caller does not
+  // have to check first. Returns the fresh counts, which is why the screen
+  // can update its own figure without a second read.
+  async registerInterest(symbolId, product) {
+    const result = await gloobalApiClient.post(
+      "/api/interest",
+      { symbolId, product },
+      { timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS }
+    );
+    return {
+      registered: Boolean(result && result.registered),
+      alreadyRegistered: Boolean(result && result.alreadyRegistered),
+      total: Number(result && result.total) || 0,
+      totalUsers: Number(result && result.totalUsers) || 0
+    };
+  },
+
+  // GET /api/interest/:product → { total, totalUsers }, both counted.
+  // Returns null rather than zeroes when the answer can't be had: a cold
+  // start is not evidence that nobody is interested, and printing 0 for it
+  // would be the same class of invention as the hardcoded figures this
+  // replaced.
+  async getInterest(product) {
+    try {
+      const result = await gloobalApiClient.get(`/api/interest/${encodeURIComponent(product)}`, {
+        timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
+      });
+      if (!result) return null;
+      const total = Number(result.total);
+      const totalUsers = Number(result.totalUsers);
+      if (!Number.isFinite(total) || !Number.isFinite(totalUsers)) return null;
+      return { total, totalUsers };
+    } catch (e) {
+      return null;
+    }
+  },
+
+  // GET /api/interest/status/:symbolId → ["bank", "coin"]. Read on reaching
+  // the dashboard so "You're on the list" is restored from the server
+  // rather than forgotten every reload. An empty array on failure, because
+  // the screens treat it as "not yet on the list", which is the state a
+  // person can act on — the POST is idempotent, so a wrongly-offered
+  // button costs nothing.
+  async getInterestStatus(symbolId) {
+    try {
+      const result = await gloobalApiClient.get(`/api/interest/status/${encodeURIComponent(symbolId)}`);
+      return Array.isArray(result && result.products) ? result.products : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
   // GET /api/referrals/:symbolId — Gloobal IDs and join dates only; the
   // backend deliberately returns no contact details.
   async getReferrals(symbolId) {
