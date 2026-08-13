@@ -88,6 +88,31 @@ function GloobalCoverageScreen({ onClose, dialCountry, sendHistory: sendHistoryP
     () => COVERAGE_ALL_COUNTRIES.filter((c) => c.code === "IN").length,
     []
   );
+  // Total users, platform-wide, from the backend rather than from what
+  // this browser can see. computeRealActiveUsers below can only ever
+  // answer about the account holding the phone, so on the global view it
+  // returns 1 — this account — no matter how many people have actually
+  // registered. GET /api/profile/count is the only source that knows.
+  //
+  // null means the server didn't answer (route absent, or still waking).
+  // The local count is used then, because "1" understating the truth is
+  // better than "0" asserting the database is empty.
+  const [platformUserCount, setPlatformUserCount] = useState16(null);
+  useEffect14(() => {
+    let cancelled = false;
+    (async () => {
+      const total = await GloobalApi.getPlatformUserCount();
+      if (!cancelled) setPlatformUserCount(total);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // Per country, the backend offers no breakdown, so a selected country
+  // stays on the locally-derived figure — this account counts for the
+  // country it has actually sent to, and nothing else.
+  const localUserCount = computeRealActiveUsers(sendHistory, flipped ? country.code : null, isFullyRegistered);
+  const displayUserCount = flipped ? localUserCount : platformUserCount != null ? platformUserCount : localUserCount;
   const [deltaColor, setDeltaColor] = useState16(() => randomLogoFlipColor());
   useEffect14(() => {
     const interval = setInterval(() => {
@@ -242,16 +267,18 @@ function GloobalCoverageScreen({ onClose, dialCountry, sendHistory: sendHistoryP
        this app, even reduced to "just this one account," so
        every category honestly stays ∆ rather than showing 0 as
        if that were a real count of something that doesn't
-       exist yet. Transactions/hour and Total users below are
-       real — computed from this account's actual send history,
-       filtered to the flipped country when one's selected. */
+       exist yet. Transactions/hour below is real — computed from
+       this account's actual send history, filtered to the flipped
+       country when one's selected. Total users is the platform-wide
+       figure from GET /api/profile/count, falling back to what can
+       be counted locally when the server has no answer. */
   }<button
     onClick={() => setShowHoomanProjects(true)}
     className="flex items-center justify-between rounded-2xl px-4 py-4"
     style={{ background: "#FFFFFF", border: `1px solid ${C.line}`, cursor: "pointer", width: "100%", textAlign: "left" }}
   ><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.accentSoft }}><Building22 size={16} style={{ color: C.accent }} /></div><span className="text-sm font-semibold" style={{ color: C.ink }}>
                   H<SingleOMark before="" after="" /><SingleOMark before="" after="" />man Projects
-                </span></div><ChevronRight5 size={16} style={{ color: C.inkSoft }} /></button><div className="flex items-center justify-between rounded-2xl px-4 py-4" style={{ background: "#FFFFFF", border: `1px solid ${C.line}` }}><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.accentSoft }}><Zap5 size={16} style={{ color: C.accent }} /></div><span className="text-sm font-semibold" style={{ color: C.ink }}>Transactions / hour</span></div><span className="mono font-bold text-base" style={{ color: C.accent }}>{computeRealTxnsLastHour(sendHistory, flipped ? country.code : null)}</span></div><div className="flex items-center justify-between rounded-2xl px-4 py-4" style={{ background: "#FFFFFF", border: `1px solid ${C.line}` }}><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.accentSoft }}><Users24 size={16} style={{ color: C.accent }} /></div><span className="text-sm font-semibold" style={{ color: C.ink }}>Total users</span></div><span className="mono font-bold text-base" style={{ color: C.accent }}>{computeRealActiveUsers(sendHistory, flipped ? country.code : null, isFullyRegistered)}</span></div>{
+                </span></div><ChevronRight5 size={16} style={{ color: C.inkSoft }} /></button><div className="flex items-center justify-between rounded-2xl px-4 py-4" style={{ background: "#FFFFFF", border: `1px solid ${C.line}` }}><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.accentSoft }}><Zap5 size={16} style={{ color: C.accent }} /></div><span className="text-sm font-semibold" style={{ color: C.ink }}>Transactions / hour</span></div><span className="mono font-bold text-base" style={{ color: C.accent }}>{computeRealTxnsLastHour(sendHistory, flipped ? country.code : null)}</span></div><div className="flex items-center justify-between rounded-2xl px-4 py-4" style={{ background: "#FFFFFF", border: `1px solid ${C.line}` }}><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.accentSoft }}><Users24 size={16} style={{ color: C.accent }} /></div><span className="text-sm font-semibold" style={{ color: C.ink }}>Total users</span></div><span className="mono font-bold text-base" style={{ color: C.accent }}>{displayUserCount}</span></div>{
     /* Creator Share — same My Share overview reached from the
        Receive screen elsewhere in the app, just a second
        entry point into it from here. */

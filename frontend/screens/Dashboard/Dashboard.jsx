@@ -1176,9 +1176,16 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       display: "flex",
       alignItems: "center",
       gap: 5,
+      // The GH Score circle below is 76px wide and sits 14px in from the
+      // card's right edge, so anything on this row that runs past
+      // (100% − 116px) ends up underneath it. A long registered name did
+      // exactly that: the badge kept growing (nowrap, no bound) straight
+      // under the circle. It now stops short and ellipsises instead.
+      maxWidth: "calc(100% - 116px)",
+      overflow: "hidden",
       zIndex: 1
     }}
-  >{myName && myName.trim() ? myName : <GloobalWordmark suffix=" ID Member" />}<span
+  ><span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{myName && myName.trim() ? myName : <GloobalWordmark suffix=" ID Member" />}</span><span
     aria-label="Verified"
     style={{
       width: 12,
@@ -1262,7 +1269,18 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        straddling it, vertically aligned with this specific
        row (not the card overall) since it's positioned
        relative to this row's own wrapper. */
-  }<div style={{ position: "relative" }}><button
+  }<div
+    style={{
+      position: "relative",
+      // Same 76px GH Score circle, same reason. IdSymbolDots in oneLine
+      // mode takes width: 100% and divides it between the twelve
+      // characters, so with nothing reserving the circle's column the
+      // last few characters of the Gloobal ID were drawn underneath it —
+      // the overlap on the profile card. Reserving the column makes the
+      // characters shrink to fit the space that is actually free.
+      paddingRight: 68
+    }}
+  ><button
     onClick={() => setShowGhCircleMenu(true)}
     aria-label="Gloobal ID — tap for options"
     className="v2-tap"

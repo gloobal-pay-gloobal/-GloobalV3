@@ -20,7 +20,12 @@ function randomLocalPhone(iso) {
 function generateReferralNetwork() {
   return [];
 }
-function generateDailySpending(sendHistory, receiveHistory) {
+// `weekCount` is how many swipeable week pages the chart gets. It stays
+// at 2 for the Dashboard wallet card, which is what it has always shown;
+// History passes its own number so the chart covers the period being
+// filtered to (one page for Today, five for This Month) instead of
+// cutting a thirty-day view off after a fortnight.
+function generateDailySpending(sendHistory, receiveHistory, weekCount = 2) {
   const entries = [
     ...sendHistory.map((t) => ({ date: parseDemoDate(t.date), amount: t.amount, direction: "paid" })),
     ...receiveHistory.map((t) => ({ date: parseDemoDate(t.date), amount: t.amount, direction: "received" }))
@@ -28,7 +33,7 @@ function generateDailySpending(sendHistory, receiveHistory) {
   const anchor = entries.length ? entries.reduce((max, t) => t.date > max ? t.date : max, entries[0].date) : /* @__PURE__ */ new Date();
   const thisWeekStart = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   thisWeekStart.setDate(thisWeekStart.getDate() - thisWeekStart.getDay());
-  const weeks = [0, 1].map((weekOffset) => {
+  const weeks = Array.from({ length: Math.max(1, weekCount) }, (_, weekOffset) => {
     const weekStart = new Date(thisWeekStart);
     weekStart.setDate(weekStart.getDate() - weekOffset * 7);
     return Array.from({ length: 7 }, (_, i) => {

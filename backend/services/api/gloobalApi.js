@@ -279,6 +279,33 @@ var GloobalApi = {
     }
   },
 
+  // GET /api/profile/count — how many accounts are registered platform-wide.
+  //
+  // Returns null, never 0, when the answer can't be had: this route is
+  // newer than the rest of the surface and is not deployed on every
+  // Backend/server.js, so a 404 means "this server can't tell us" and a
+  // cold start means "not yet". Coverage falls back to what it can count
+  // locally in that case. Printing 0 for either would be inventing a
+  // figure, which is the exact bug the invented 13,422,000 was.
+  //
+  // Server side this is `User.countDocuments()`:
+  //   app.get('/api/profile/count', async (req, res) =>
+  //     res.json({ total: await User.countDocuments() }));
+  // Both `total` and `totalUsers` are read because the route has been
+  // written both ways.
+  async getPlatformUserCount() {
+    try {
+      const result = await gloobalApiClient.get("/api/profile/count", {
+        timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
+      });
+      if (!result) return null;
+      const total = Number(result.total ?? result.totalUsers ?? result.count);
+      return Number.isFinite(total) && total >= 0 ? total : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
   // GET /api/referrals/:symbolId — Gloobal IDs and join dates only; the
   // backend deliberately returns no contact details.
   async getReferrals(symbolId) {

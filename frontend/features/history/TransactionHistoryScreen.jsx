@@ -14,6 +14,11 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
   const [receipt, setReceipt] = useState12(null);
   const requestCloseReceipt = useBackClose(!!receipt, () => setReceipt(null));
   const routedHistoryRef = useRef9(false);
+  // Today / This Week / This Month. Everything below — the two summary
+  // tiles, the daily chart and both sides of the pager — reads the same
+  // filtered rows, so the period is one choice rather than three
+  // separately-scoped views that can disagree with each other.
+  const [historyPeriod, setHistoryPeriod] = useState12("week");
   useEffect11(() => {
     if (isActive) {
       if (routedHistoryRef.current) {
@@ -21,6 +26,7 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
       } else {
         setHistoryTab("receiving");
         setHistoryMethodFilter("all");
+        setHistoryPeriod("week");
         if (historyScrollRef.current) historyScrollRef.current.scrollLeft = 0;
       }
     }
@@ -60,12 +66,56 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
     const idx = Math.round(el.scrollLeft / Math.max(1, el.clientWidth));
     setHistoryTab(idx === 0 ? "receiving" : "sending");
   }
+  // Everything on this screen is scoped to the selected period.
+  const periodSendHistory = useMemo5(() => filterHistoryByPeriod(sendHistory, historyPeriod), [sendHistory, historyPeriod]);
+  const periodReceiveHistory = useMemo5(() => filterHistoryByPeriod(receiveHistory, historyPeriod), [receiveHistory, historyPeriod]);
   // Daily trend for this history's own data — same day-by-day
   // paid/received bar chart the wallet card uses, so "what does my
   // typical day look like" is answerable from inside History too,
-  // not only from the Dashboard's headline chart.
-  const historyDailyTrend = useMemo5(() => generateDailySpending(sendHistory, receiveHistory), [sendHistory, receiveHistory]);
+  // not only from the Dashboard's headline chart. The page count
+  // follows the period so a month's worth of days isn't cut off at
+  // two weeks.
+  const historyDailyTrend = useMemo5(
+    () => generateDailySpending(periodSendHistory, periodReceiveHistory, historyPeriodMeta(historyPeriod).weekPages),
+    [periodSendHistory, periodReceiveHistory, historyPeriod]
+  );
+  const periodPaidTotal = useMemo5(() => sumHistoryAmount(periodSendHistory), [periodSendHistory]);
+  const periodReceivedTotal = useMemo5(() => sumHistoryAmount(periodReceiveHistory), [periodReceiveHistory]);
   return <div><style>{`.history-pager::-webkit-scrollbar { display: none; }`}</style>{
+    /* Period tabs — the outermost filter on this screen. The chart and
+       both pager panels below are built from the rows these leave in,
+       so the tab, the two totals and the list can never describe
+       different spans of time. */
+  }<div style={{ display: "flex", gap: 6, marginBottom: 12 }}>{HISTORY_PERIODS.map((p) => <button
+    key={p.key}
+    onClick={() => setHistoryPeriod(p.key)}
+    aria-pressed={historyPeriod === p.key}
+    className="v2-tap"
+    style={{
+      flex: 1,
+      border: "none",
+      borderRadius: 999,
+      padding: "9px 0",
+      cursor: "pointer",
+      fontSize: 12,
+      fontWeight: 800,
+      background: historyPeriod === p.key ? T.accentSoft : T.surfaceAlt,
+      color: historyPeriod === p.key ? T.accent : T.inkFaint,
+      transition: "background 0.2s ease, color 0.2s ease"
+    }}
+  >{p.label}</button>)}</div>{
+    /* Received / Paid for the selected period. These used to be a
+       lifetime figure sitting above a filtered list, which is how a
+       period with no activity in it still showed somebody else's
+       number. Both are summed from the same filtered rows the list
+       renders. */
+  }<div style={{ display: "flex", gap: 10, marginBottom: 14 }}>{[
+    { key: "received", label: "Received", sign: "+", value: periodReceivedTotal, color: T.positive, chip: T.positiveSoft },
+    { key: "paid", label: "Paid", sign: "−", value: periodPaidTotal, color: T.accent, chip: T.accentSoft }
+  ].map((tile) => <div
+    key={tile.key}
+    style={{ flex: 1, minWidth: 0, borderRadius: T.radiusLg, background: tile.chip, padding: "12px 14px" }}
+  ><div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.inkSoft }}>{tile.label}</div><div style={{ fontSize: 17, fontWeight: 800, color: tile.color, fontFamily: T.fontDisplay, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tile.sign}{ccy}{tile.value.toFixed(2)}</div></div>)}</div>{
     /* Daily trend — same DailySpendingChart the wallet card uses,
        scoped to just this history's data, giving a quick "average
        day vs a bigger day" read before scrolling the list below. */
@@ -108,11 +158,11 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
     }}
     className="history-pager"
   >{[
-    { key: "receiving", rows: receiveHistory, sign: "+", color: T.positive, chip: T.positiveSoft },
-    { key: "sending", rows: sendHistory, sign: "\u2212", color: T.accent, chip: T.accentSoft }
+    { key: "receiving", rows: periodReceiveHistory, sign: "+", color: T.positive, chip: T.positiveSoft },
+    { key: "sending", rows: periodSendHistory, sign: "\u2212", color: T.accent, chip: T.accentSoft }
   ].map((col) => {
     const filteredRows = historyMethodFilter === "all" ? col.rows : col.rows.filter((t) => t.method === historyMethodFilter);
-    return <div key={col.key} style={{ flex: "0 0 100%", scrollSnapAlign: "start", minWidth: 0 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{filteredRows.length === 0 ? <div style={{ padding: "20px 16px", textAlign: "center", fontSize: 12, color: T.inkFaint }}>Nothing yet</div> : filteredRows.map((t, i) => <TransactionRow
+    return <div key={col.key} style={{ flex: "0 0 100%", scrollSnapAlign: "start", minWidth: 0 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{filteredRows.length === 0 ? <div style={{ padding: "20px 16px", textAlign: "center", fontSize: 12, color: T.inkFaint }}>Nothing {historyPeriodMeta(historyPeriod).emptyLabel}</div> : filteredRows.map((t, i) => <TransactionRow
       key={`${t.name}-${t.date}`}
       t={t}
       chip={col.chip}

@@ -1,4 +1,40 @@
 // src/features/history/historyUtils.js
+// Today / This Week / This Month, the three periods the History screen
+// filters by. `days` counts back INCLUSIVE of today, so "Today" is a
+// single day rather than a day and a bit, and "This Week" is the last
+// seven calendar days rather than the calendar week — someone looking at
+// their history on a Monday wants the week behind them, not the two days
+// since Sunday.
+var HISTORY_PERIODS = [
+  { key: "today", label: "Today", emptyLabel: "today", days: 1, weekPages: 1 },
+  { key: "week", label: "This Week", emptyLabel: "this week", days: 7, weekPages: 2 },
+  { key: "month", label: "This Month", emptyLabel: "this month", days: 30, weekPages: 5 }
+];
+function historyPeriodMeta(period) {
+  return HISTORY_PERIODS.find((p) => p.key === period) || HISTORY_PERIODS[1];
+}
+function historyPeriodStart(period, now) {
+  const ref = now || /* @__PURE__ */ new Date();
+  const start = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+  start.setDate(start.getDate() - (historyPeriodMeta(period).days - 1));
+  return start;
+}
+// History rows carry a display date ("Aug 13"), not a timestamp, so the
+// comparison goes through parseDemoDate — the same reader the daily
+// spending chart already uses, which resolves a month/day into the most
+// recent year it can have been. A row whose date won't parse is dropped
+// from the filtered view rather than silently counted in every period.
+function filterHistoryByPeriod(rows, period, now) {
+  if (!Array.isArray(rows)) return [];
+  const start = historyPeriodStart(period, now);
+  return rows.filter((t) => {
+    const parsed = parseDemoDate(t.date);
+    return !isNaN(parsed.getTime()) && parsed >= start;
+  });
+}
+function sumHistoryAmount(rows) {
+  return Math.round(rows.reduce((sum, t) => sum + (Number(t.amount) || 0), 0) * 100) / 100;
+}
 function buildHistoryReceipt(t, direction, dialCountry, ccy) {
   const localCurrency = COUNTRY_CURRENCY[dialCountry.iso] || "USD";
   const counterpartyCountry = ALL_COUNTRIES.find((c) => c.flag === t.flag);

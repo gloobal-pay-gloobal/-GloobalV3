@@ -235,7 +235,22 @@ function GloobalId() {
   const [scanError, setScanError] = useState19(null);
   const [showScanBiometric, setShowScanBiometric] = useState19(false);
   const [scanBiometricScanning, setScanBiometricScanning] = useState19(false);
-  const handleQrScanned = (rawCode) => {
+  // A scanned code decodes to a Gloobal ID, and an ID is not proof that
+  // anybody holds it — the checksum only says the string wasn't mangled.
+  // So the scan now runs the SAME backend lookup typed entry does in Send
+  // Money (GET /api/users/resolve), and the confirmation card shows the
+  // registered name it comes back with instead of twelve symbols the
+  // person has no way to recognise.
+  //
+  // A 404 is not made fatal. This screen's demo code is a generated ID
+  // that no account holds, and the app already supports paying an
+  // unregistered counterparty as a local-ledger simulation (the same
+  // `skipped` case Send Money's onRemoteSend reports). Refusing here
+  // would remove the only way to exercise Scan & Pay in an environment
+  // with no camera. It is labelled as unregistered instead, so the
+  // difference is visible rather than hidden.
+  const [scanResolving, setScanResolving] = useState19(false);
+  const handleQrScanned = async (rawCode) => {
     setScanError(null);
     if (usedQrCodes.has(rawCode)) {
       setScanError("This QR code has already been used.");
@@ -246,7 +261,32 @@ function GloobalId() {
       setScanError("This isn't a valid Gloobal QR code.");
       return;
     }
-    setScanPendingPayment({ ...decoded, rawCode });
+    setScanResolving(true);
+    let user = null;
+    try {
+      user = await GloobalApi.resolveUser(decoded.gloobalId);
+    } catch (err) {
+      // Only a definite 404 means "nobody holds this ID". A cold start or
+      // a 5xx is not an answer about the recipient, and treating it as one
+      // would put "unregistered" under a perfectly real account.
+      if (!(err instanceof GloobalApiError && err.status === 404)) {
+        setScanResolving(false);
+        setScanError(err.message);
+        return;
+      }
+    }
+    setScanResolving(false);
+    setScanPendingPayment({
+      ...decoded,
+      rawCode,
+      // The ID the backend holds NOW — someone whose code was printed
+      // before they changed their Gloobal ID is still paid correctly.
+      gloobalId: (user && user.symbolId) || decoded.gloobalId,
+      registered: Boolean(user),
+      // fullName is the mobile number on accounts created before the name
+      // step existed, and a name that is just the number is not a name.
+      recipientName: user ? (user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User") : null
+    });
   };
   // Scan & Pay runs through the exact same canonical executeTransaction
   // lifecycle as Send Money and Pay a Business — no separate posting
@@ -291,7 +331,7 @@ function GloobalId() {
         amount,
         payMethodLabel: scanPayMethod,
         memo: "Scan & Pay",
-        name: scanPendingPayment.gloobalId,
+        name: scanPendingPayment.recipientName || scanPendingPayment.gloobalId,
         shareRatePercent: 0,
         time: formatClockTime(now),
         now,
@@ -299,7 +339,7 @@ function GloobalId() {
       });
       if (result.ok) {
         const historyEntry = {
-          name: scanPendingPayment.gloobalId,
+          name: scanPendingPayment.recipientName || scanPendingPayment.gloobalId,
           date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           amount,
           status: "completed",
@@ -2162,9 +2202,17 @@ function GloobalId() {
                   No real camera in this environment — tap the demo code below to simulate a scan.
                 </div><button
     onClick={() => handleQrScanned(demoScanTarget.code)}
+    disabled={scanResolving}
     className="v2-tap"
-    style={{ border: "none", background: "none", padding: 0, cursor: "pointer" }}
-  ><div style={{ background: "#fff", borderRadius: T.radiusLg, padding: 14, boxShadow: T.shadowCard }}><GloobalQRCode code={demoScanTarget.code} size={180} /></div><div style={{ fontSize: 11, color: T.inkFaint, marginTop: 8 }}>Tap to simulate scanning {demoScanTarget.name}'s code</div></button>{scanError && <div style={{ fontSize: 12.5, color: T.negative, textAlign: "center", fontWeight: 700 }}>{scanError}</div>}</> : <div style={{ width: "100%", maxWidth: 340, borderRadius: T.radiusXl, background: T.surface, boxShadow: T.shadowCard, border: `1px solid ${T.line}`, padding: "28px 24px", textAlign: "center" }}><div style={{ fontSize: 12, fontWeight: 700, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 10 }}>{scanPendingPayment.amountCents > 0 ? "Payment request" : "Gloobal ID"}</div>{scanPendingPayment.amountCents > 0 && <div style={{ fontSize: 32, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginBottom: 14 }}>{CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$"}{(scanPendingPayment.amountCents / 100).toFixed(2)}</div>}<div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 20 }}><ColoredGloobalId id={scanPendingPayment.gloobalId} /></div><button
+    style={{ border: "none", background: "none", padding: 0, cursor: scanResolving ? "default" : "pointer" }}
+  ><div style={{ background: "#fff", borderRadius: T.radiusLg, padding: 14, boxShadow: T.shadowCard }}><GloobalQRCode code={demoScanTarget.code} size={180} /></div><div style={{ fontSize: 11, color: T.inkFaint, marginTop: 8 }}>{scanResolving ? "Looking this ID up…" : `Tap to simulate scanning ${demoScanTarget.name}'s code`}</div></button>{scanError && <div style={{ fontSize: 12.5, color: T.negative, textAlign: "center", fontWeight: 700 }}>{scanError}</div>}</> : <div style={{ width: "100%", maxWidth: 340, borderRadius: T.radiusXl, background: T.surface, boxShadow: T.shadowCard, border: `1px solid ${T.line}`, padding: "28px 24px", textAlign: "center" }}><div style={{ fontSize: 12, fontWeight: 700, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 10 }}>{scanPendingPayment.amountCents > 0 ? "Payment request" : "Gloobal ID"}</div>{scanPendingPayment.amountCents > 0 && <div style={{ fontSize: 32, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginBottom: 14 }}>{CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$"}{(scanPendingPayment.amountCents / 100).toFixed(2)}</div>}{scanPendingPayment.recipientName && <div style={{ fontSize: 15, fontWeight: 800, color: T.ink, marginBottom: 6 }}>{scanPendingPayment.recipientName}</div>}<div style={{ fontSize: 13, color: T.inkSoft, marginBottom: scanPendingPayment.registered ? 20 : 8 }}><ColoredGloobalId id={scanPendingPayment.gloobalId} /></div>{
+    /* Said plainly rather than left to be discovered after paying:
+       nobody is registered under this ID, so there is no account on
+       the other side for the backend to credit and the payment runs
+       against the local ledger only. */
+  }{!scanPendingPayment.registered && <div style={{ fontSize: 11.5, fontWeight: 700, color: T.negative, marginBottom: 20, lineHeight: 1.45 }}>
+                    No Gloobal account is registered under this ID.
+                  </div>}<button
     onClick={() => {
       if (scanPendingPayment.amountCents > 0) {
         setScanPayOptionsOpen(true);
