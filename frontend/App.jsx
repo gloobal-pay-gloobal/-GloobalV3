@@ -237,6 +237,12 @@ function GloobalId() {
   // moves, so it skips straight to biometric, same as before.
   const [scanPayOptionsOpen, setScanPayOptionsOpen] = useState19(false);
   const [scanPayPinOpen, setScanPayPinOpen] = useState19(false);
+  // The PIN the backend has already confirmed, held out of visible state so
+  // the modal can wipe its on-screen digits while the value travels the one
+  // step further POST /api/transactions/send needs it to. Same arrangement as
+  // Send Money's verifiedPinRef, and cleared the moment the send settles or
+  // the payment is abandoned.
+  const scanVerifiedPinRef = useRef13(null);
   const [scanPayMethod, setScanPayMethod] = useState19(null);
   // "My Code" can double as a payment request: typing an amount here
   // embeds it into the SAME QR (encodeGloobalQR already supports
@@ -356,14 +362,54 @@ function GloobalId() {
     setScanBiometricScanning(false);
     setShowScanBiometric(false);
     if (!verified) {
+      // The PIN authorised a payment that is not happening.
+      scanVerifiedPinRef.current = null;
       setScanError("Couldn't verify it's you — payment cancelled.");
       return;
     }
     const amount = scanPendingPayment.amountCents / 100;
     const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
     if (amount > 0) {
-      const txnId = genTxnId();
+      let txnId = genTxnId();
       const now = /* @__PURE__ */ new Date();
+      // The backend goes FIRST and is authoritative, exactly as it does in
+      // Send Money's completePayment.
+      //
+      // This whole branch used to be local only: executeTransaction posted to
+      // this browser's ledger, the screen announced "Paid … — verified and
+      // locked", a history row appeared, and MongoDB never heard about any of
+      // it. The person scanned was never credited, and the next dashboard load
+      // quietly reversed the payer's balance back, because the profile read
+      // reconciles the local ledger against the server's figure. A payment
+      // that announces itself and then un-happens is worse than one that
+      // fails outright.
+      const remote = await handleRemoteSend({
+        txnId,
+        amount,
+        currency: COUNTRY_CURRENCY[dialCountry.iso] || "INR",
+        receiver: { gloobalId: scanPendingPayment.gloobalId, name: scanPendingPayment.recipientName },
+        pin: scanVerifiedPinRef.current || "",
+        payMethodLabel: scanPayMethod,
+        memo: "Scan & Pay",
+        clientRequestId: generateRequestId()
+      });
+      if (remote && remote.ok === false && !remote.skipped) {
+        scanVerifiedPinRef.current = null;
+        setScanError(remote.reason || "The server rejected this payment.");
+        return;
+      }
+      // `skipped` is the honest case, not a failure: the scanned ID belongs to
+      // no registered account — the confirmation card already says so — which
+      // leaves the backend no counterparty to credit. Those stay a local
+      // simulation, exactly as they were.
+      const settledRemotely = Boolean(remote && remote.ok && !remote.skipped);
+      if (settledRemotely && remote.transactionId) txnId = remote.transactionId;
+      // The payee's real Creator Share, as the server applied it. A scanned
+      // code carries no rate of its own, so this used to be hardcoded 0 and
+      // the payer's asset seed was silently skipped on every scanned payment
+      // to a creator.
+      const shareRatePercent =
+        settledRemotely && Number.isFinite(remote.cashbackRate) ? remote.cashbackRate * 100 : 0;
       // My Essentials daily pool applies here — before the real
       // payment, as its own separate step (see
       // TransactionOrchestrator#applyEssentialsPoolSubsidy). Not a
@@ -380,11 +426,13 @@ function GloobalId() {
         payMethodLabel: scanPayMethod,
         memo: "Scan & Pay",
         name: scanPendingPayment.recipientName || scanPendingPayment.gloobalId,
-        shareRatePercent: 0,
+        shareRatePercent,
         time: formatClockTime(now),
         now,
         clientRequestId: generateRequestId()
       });
+      // Held no longer than the send it authorised.
+      scanVerifiedPinRef.current = null;
       if (result.ok) {
         const historyEntry = {
           name: scanPendingPayment.recipientName || scanPendingPayment.gloobalId,
@@ -394,7 +442,7 @@ function GloobalId() {
           method: scanPayMethod && scanPayMethod.includes("PayLater") ? "paylater" : "bank",
           time: formatClockTime(now),
           txnId,
-          shareRate: 0,
+          shareRate: shareRatePercent,
           ledgerRecordId: result.ledgerRecordId,
           role: activeShareRole
         };
@@ -416,6 +464,9 @@ function GloobalId() {
     // Marking it used before the risk check burned the QR on a payment
     // that never happened and left no way to retry it.
     setUsedQrCodes((prev) => new Set(prev).add(scanPendingPayment.rawCode));
+    // Covers the zero-amount branch too, which never reaches the clear inside
+    // the payment path above.
+    scanVerifiedPinRef.current = null;
     setShowScanScreen(false);
     setScanPendingPayment(null);
     showToast(amount > 0 ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked` : "Gloobal ID verified and locked");
@@ -2060,6 +2111,8 @@ function GloobalId() {
        target is standing in for "the camera detected this code." */
   }{showScanScreen && <div style={{ position: "fixed", inset: 0, zIndex: 400, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><DashboardAmbientBg /><div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
     onClick={() => {
+      // Leaving the scanner abandons whatever was pending on it, PIN included.
+      scanVerifiedPinRef.current = null;
       setShowScanScreen(false);
       setScanPendingPayment(null);
       setScanError(null);
@@ -2341,9 +2394,15 @@ function GloobalId() {
     }}
   /><PayPinModal
     open={scanPayPinOpen}
-    onClose={() => setScanPayPinOpen(false)}
+    onClose={() => {
+      // Backing out of the PIN abandons the payment, so the PIN it would have
+      // authorised must not survive to a later attempt that passed no check.
+      scanVerifiedPinRef.current = null;
+      setScanPayPinOpen(false);
+    }}
     amountLabel={scanPendingPayment ? `\u2212${CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$"}${(scanPendingPayment.amountCents / 100).toFixed(2)}` : null}
-    onVerified={() => {
+    onVerified={(verifiedPin) => {
+      scanVerifiedPinRef.current = verifiedPin || null;
       setScanPayPinOpen(false);
       setShowScanBiometric(true);
     }}

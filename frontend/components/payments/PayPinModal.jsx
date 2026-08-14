@@ -11,10 +11,16 @@
 // answers with it: five wrong tries locks the PIN for ten minutes and says
 // so, which a local string compare could never report.
 //
-// Nothing downstream needs the PIN value, unlike Send Money — both callers
-// go on to executeTransaction, which posts to the local ledger and never
-// to POST /api/transactions/send — so it is checked, discarded, and only
-// the fact of the check is passed on via onVerified().
+// The verified PIN is handed to onVerified(pin), because Scan & Pay now goes
+// on to POST /api/transactions/send and that route bcrypt-checks the PIN in
+// its own body. This modal used to check the PIN and then throw it away, on
+// the reasoning that both callers only ever posted to the local ledger — true
+// when it was written, and the reason a scanned payment never reached the
+// backend at all.
+//
+// The value is passed, not stored: it lives in the caller's ref only until the
+// send it authorises settles. Callers that stay local (Pay a Business, whose
+// payee is not a Gloobal account) simply ignore the argument.
 function PayPinModal({ open, onClose, amountLabel, onVerified }) {
   const [pin, setPin] = useState("");
   const [pinRevealed, setPinRevealed] = useState(false);
@@ -47,8 +53,13 @@ function PayPinModal({ open, onClose, amountLabel, onVerified }) {
         if (symbolId) await GloobalApi.verifyPin(symbolId, pin);
         if (cancelled) return;
         setChecking(false);
+        // Named before the on-screen buffer is cleared. `pin` is this render's
+        // binding and setPin does not change it, so this is for the reader
+        // rather than the machine — but the equivalent slip one component over
+        // is what made Send Money unfinishable, so the order is kept explicit.
+        const verified = pin;
         setPin("");
-        onVerified();
+        onVerified(verified);
       } catch (err) {
         if (cancelled) return;
         setChecking(false);
