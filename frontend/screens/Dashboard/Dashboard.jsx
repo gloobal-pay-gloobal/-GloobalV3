@@ -36,7 +36,7 @@ import {
 
 
 // src/screens/Dashboard/Dashboard.jsx
-function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, profilePhoto, onChangeProfilePhoto, sendHistory, bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange, onGloobalIdChange }) {
+function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, profilePhoto, onChangeProfilePhoto, sendHistory, receivedHistory = [], bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange, onGloobalIdChange }) {
   const [balanceVisible, setBalanceVisible] = useState14(false);
   const [showBalanceBiometric, setShowBalanceBiometric] = useState14(false);
   const [balanceBiometricScanning, setBalanceBiometricScanning] = useState14(false);
@@ -71,7 +71,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       showToast2("Couldn't verify it's you — nothing was changed");
       return;
     }
-    run();
+    // Awaited so a gated action that talks to the backend (My Share's
+    // PATCH, for one) can report its own failure instead of the gate
+    // reporting success the moment the fingerprint reads.
+    await run();
   };
   const handleToggleBalance = () => {
     if (balanceVisible) {
@@ -250,7 +253,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   // Pay a Business, already role-filtered by roleSendHistory below),
   // toggled by one flip control, showing the 5 most recent either way.
   const [recentActivityTab, setRecentActivityTab] = useState14("receiving");
-  const receivedRows = useMemo5(
+  const creatorShareRows = useMemo5(
     // shareRate carried through as a real percent (matching the same
     // convention "sent" rows already use) so this row's own receipt
     // shows the actual Creator Share rate that generated it — never
@@ -274,6 +277,24 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     }).reverse(),
     [assetSeeds]
   );
+  // Everything this account received: the Creator Share tabs above, plus the
+  // real person-to-person payments made TO it (mapped from
+  // GET /api/transactions/:symbolId in App, split on the backend's own
+  // per-viewer `direction`).
+  //
+  // These used to be absent entirely — a received payment was appended to the
+  // sent list and rendered as money paid out — so a two-sided transaction
+  // showed as a debit on BOTH accounts. Newest first, across both sources, so
+  // the merged list reads as one history rather than two concatenated ones.
+  const receivedRows = useMemo5(() => {
+    const merged = creatorShareRows.concat(Array.isArray(receivedHistory) ? receivedHistory : []);
+    return merged.slice().sort((a, b) => {
+      const at = parseDemoDate(a.date).getTime();
+      const bt = parseDemoDate(b.date).getTime();
+      if (isNaN(at) || isNaN(bt) || at === bt) return 0;
+      return bt - at;
+    });
+  }, [creatorShareRows, receivedHistory]);
   const [assetDetailKey, setAssetDetailKey] = useState14(null);
   const requestCloseAssetDetail = useBackClose(!!assetDetailKey, () => setAssetDetailKey(null));
   const [showSettleAssetsBiometric, setShowSettleAssetsBiometric] = useState14(false);
@@ -344,6 +365,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const requestCloseMyShare = useBackClose(showMyShare, () => setShowMyShare(false));
   const [showMyShareBiometric, setShowMyShareBiometric] = useState14(false);
   const [myShareBiometricScanning, setMyShareBiometricScanning] = useState14(false);
+  // In flight between the biometric passing and the backend answering, so
+  // the Update button can say it is working rather than looking ignored on
+  // a cold Render start.
+  const [myShareSaving, setMyShareSaving] = useState14(false);
   const handleMyShareBiometricVerify = () => runBiometricGate({
     scanning: myShareBiometricScanning,
     setScanning: setMyShareBiometricScanning,
@@ -353,13 +378,56 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     // this account offers on every future payment, so it must not change
     // on an unverified tap. The sheet stays open on failure so the rate
     // is still there to try again with.
-    run: () => {
-      setShowMyShare(false);
-      showToast2(`My Share set to ${myShareRate.toFixed(2)}%`);
+    //
+    // This used to close the sheet and announce the new rate without ever
+    // telling the backend, so My Share was a number that existed only in
+    // this component: reloading lost it, and — because the rate applied to
+    // a payment is the PAYEE's stored `cashbackRate`, read server-side —
+    // nobody paying this account was ever charged it. The PATCH is now the
+    // save, and the toast only follows the server agreeing.
+    run: async () => {
+      const symbolId = currentSymbolId || myGloobalId;
+      if (!symbolId) {
+        showToast2("Sign in to set My Share.");
+        return;
+      }
+      setMyShareSaving(true);
+      try {
+        // The backend stores a decimal (1% = 0.01) and answers with what it
+        // actually saved, which is what the UI then shows — a rate the
+        // server clamped or rounded must not be displayed as the rate that
+        // was asked for.
+        const saved = await GloobalApi.setCreatorCashbackRate(symbolId, myShareRate / 100);
+        const savedPercent = Math.round(saved * 1e4) / 100;
+        setMyShareRate(savedPercent);
+        setShowMyShare(false);
+        showToast2(`My Share set to ${savedPercent.toFixed(2)}%`);
+      } catch (err) {
+        showToast2(err.message || "Couldn't save My Share just now");
+      } finally {
+        setMyShareSaving(false);
+      }
     }
   });
   const [showCreatorOverview, setShowCreatorOverview] = useState14(false);
   const requestCloseCreatorOverview = useBackClose(showCreatorOverview, () => setShowCreatorOverview(false));
+  // Platform-wide account count for the Creator Share overview's filter,
+  // read when that screen is opened. It was the literal `1` — true of the
+  // test database and of nothing else, and wrong the moment a second person
+  // registered. null means the server could not be reached, which renders as
+  // "—" rather than as a number nobody counted.
+  const [platformUserCount, setPlatformUserCount] = useState14(null);
+  useEffect12(() => {
+    if (!showCreatorOverview) return undefined;
+    let cancelled = false;
+    (async () => {
+      const total = await GloobalApi.getPlatformUserCount();
+      if (!cancelled) setPlatformUserCount(total);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreatorOverview]);
   const [creatorFilterMin, setCreatorFilterMin] = useState14(0);
   const [creatorFilterMax, setCreatorFilterMax] = useState14(7);
   const [showRentChoice, setShowRentChoice] = useState14(false);
@@ -502,7 +570,17 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     setGhAnswers(nextAnswers);
     setGhScreen(Object.keys(nextAnswers).length === ghTotalQuestions ? "complete" : "items");
   };
-  const [gloobalIdOverride, setGloobalIdOverride] = useState14(null);
+  // Creator-side renames only. The personal Gloobal ID deliberately has no
+  // override any more: it is whatever useCurrentSymbolId reports, full stop.
+  // A single `gloobalIdOverride` used to serve both roles, so renaming while
+  // in Creator mode wrote the new Creator ID over the *personal* one — the
+  // profile and the dashboard then showed an ID the account had never had,
+  // while the Scan screen (reading the real session) showed the true one.
+  // That is the same account displaying two different Gloobal IDs.
+  //
+  // The Creator ID is a local-only identifier with no backend record, which
+  // is why it needs an override at all and the personal ID does not.
+  const [creatorIdOverride, setCreatorIdOverride] = useState14(null);
   // Declared early so shareableGloobalId (right below) can already be
   // role-aware — same source of truth toggleShareRole/roleSendHistory
   // further down use, just introduced here instead of down there.
@@ -553,14 +631,44 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   // the profile header read the raw prop — which is why the same account
   // showed different IDs depending on where you looked.
   const currentSymbolId = useCurrentSymbolId(myGloobalId);
-  const personalGloobalId = gloobalIdOverride || (currentSymbolId && currentSymbolId.length === 12 ? currentSymbolId : "++++++++++++");
+  const personalGloobalId = currentSymbolId && currentSymbolId.length === 12 ? currentSymbolId : "++++++++++++";
   // Same real code the Scan screen's "My Code" tab shows for the same
   // role. Creator mode deliberately shares a different identifier
   // (creatorId): scanning the two means different things, so this is the
   // one place the displayed ID is legitimately not the personal one.
-  const shareableGloobalId = shareRole === "merchant" ? creatorId : personalGloobalId;
+  const activeCreatorId = creatorIdOverride || creatorId;
+  const shareableGloobalId = shareRole === "merchant" ? activeCreatorId : personalGloobalId;
   const gloobalIdTag = shareableGloobalId;
   const referralLink = `https://gloobal.id/r/${shareableGloobalId}`;
+  // The rate this account actually offers, read back from the server.
+  //
+  // Without this the sheet opened at its hardcoded 1% every time, so someone
+  // who had set 3% was shown 1% and would either believe it had been lost or
+  // "re-save" a rate they never chose. GET /api/profile/:symbolId carries
+  // `cashbackRate` as a decimal; the UI works in percent.
+  //
+  // Silent on failure, and deliberately: a cold Render start is not evidence
+  // that the rate is 1%, so the local value simply stays until the server can
+  // be reached. `cancelled` guards the ID changing mid-flight (a rename), so
+  // an older account's rate cannot land on a newer one.
+  useEffect12(() => {
+    if (!currentSymbolId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const profile = await GloobalApi.getProfile(currentSymbolId);
+        if (cancelled || !profile) return;
+        const rate = Number(profile.cashbackRate);
+        if (!Number.isFinite(rate) || rate < 0) return;
+        setMyShareRate(Math.round(rate * 1e4) / 100);
+      } catch (e) {
+        /* read-only; the sheet keeps whatever it had */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSymbolId]);
   const ghCategoryScore = (catKey) => {
     const cat = GH_CATEGORIES.find((c) => c.key === catKey);
     const answered = cat.items.filter((it) => ghAnswers[`${catKey}.${it.key}`]);
@@ -611,7 +719,8 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const saveNewGloobalId = async () => {
     if (newIdBuffer.length !== 12) return;
     const previousId = shareableGloobalId;
-    const isBackedByAccount = shareRole !== "merchant" && (currentSymbolId || myGloobalId || "").length === 12;
+    const isCreatorRename = shareRole === "merchant";
+    const isBackedByAccount = !isCreatorRename && (currentSymbolId || myGloobalId || "").length === 12;
     if (isBackedByAccount) {
       try {
         // The ID the backend knows this account by — not shareableGloobalId,
@@ -636,7 +745,11 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       { id: newIdBuffer, previousId, date: now.toLocaleDateString(void 0, { month: "short", day: "numeric", year: "numeric" }), time: formatClockTime(now) },
       ...h
     ]);
-    setGloobalIdOverride(newIdBuffer);
+    // Only the Creator ID is held locally. A personal rename needs no local
+    // copy at all: the PATCH above succeeded, onGloobalIdChange wrote it into
+    // the session, and useCurrentSymbolId re-reads that — so every screen,
+    // including the ones outside this component, moves together.
+    if (isCreatorRename) setCreatorIdOverride(newIdBuffer);
     setNewIdBuffer("");
     requestCloseProfileOverlay();
   };
@@ -1938,11 +2051,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     { icon: PieChart, label: "My contribution", value: `${myShareRate.toFixed(2)}%`, color: T.accent }
   ].map((row, i) => <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}><row.icon size={16} color={T.inkFaint} /><span style={{ flex: 1, fontSize: 13.5, color: T.inkSoft, fontWeight: 600 }}>{row.label}</span><span style={{ fontSize: 14, fontWeight: 800, color: row.color }}>{row.value}</span></div>)}</div></div><div style={{ flexShrink: 0, padding: "0 18px calc(18px + env(safe-area-inset-bottom, 0px))" }}><button
     onClick={() => setShowMyShareBiometric(true)}
+    disabled={myShareSaving}
     className="v2-tap"
-    style={{ width: "100%", border: "none", borderRadius: T.radiusMd, padding: "16px 0", color: "#fff", fontSize: 14.5, fontWeight: 800, background: T.gradButton, boxShadow: "0 8px 20px rgba(124,58,237,0.32)", cursor: "pointer" }}
-  >
-              Update
-            </button></div></div>}{
+    style={{ width: "100%", border: "none", borderRadius: T.radiusMd, padding: "16px 0", color: "#fff", fontSize: 14.5, fontWeight: 800, background: T.gradButton, boxShadow: "0 8px 20px rgba(124,58,237,0.32)", cursor: myShareSaving ? "default" : "pointer", opacity: myShareSaving ? 0.65 : 1 }}
+  >{myShareSaving ? "Saving…" : "Update"}</button></div></div>}{
     /* Applying a newly-chosen My Share rate — same mandatory Face ID +
        fingerprint screen used for PIN-follow-up everywhere else. */
   }{showMyShareBiometric && <BiometricVerifyScreen
@@ -3201,15 +3313,20 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     className="v2-tap"
     style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
   ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Creator Share overview</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}>{
-    /* Filter — real numbers, not fake: this screen only ever
-       renders once this account has completed registration (it
-       lives inside the Dashboard, which itself only mounts
-       once "stage" reaches "dashboard"), so "Total users" is
-       genuinely 1, the same reasoning as Global Coverage's own
-       user count. "Sharing" means a rate above 0%; the min/max
-       inputs filter which range this one real account's rate
-       falls into. */
-  }<div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}><div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, marginBottom: 12 }}>Filter</div><div style={{ display: "flex", gap: 10, marginBottom: 14 }}><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>Total users</div><div style={{ fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginTop: 2 }}>1</div></div><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>Sharing</div><div style={{ fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginTop: 2 }}>{myShareRate > 0 ? 1 : 0}</div></div><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>In range</div><div style={{ fontSize: 18, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay, marginTop: 2 }}>{myShareRate >= creatorFilterMin && myShareRate <= creatorFilterMax ? 1 : 0}</div></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ flex: 1 }}><div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>Between %</div><input
+    /* Filter — real numbers, not fake. "Total users" is the
+       platform-wide count from the backend (GET /api/stats, the
+       same figure Global Coverage shows), not the hardcoded 1 it
+       used to be — that was true of the test database and of
+       nothing after it.
+
+       The other two tiles are deliberately about THIS account and
+       say so in their labels. Nobody else's cashback rate is
+       readable from here — the backend exposes a rate only on a
+       user you resolve by ID — so a tile claiming "3 of 40 are
+       sharing" would be an invention. "You share" is a rate above
+       0%; the min/max inputs below say whether your own rate falls
+       in the range being asked about. */
+  }<div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}><div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, marginBottom: 12 }}>Filter</div><div style={{ display: "flex", gap: 10, marginBottom: 14 }}><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>Total users</div><div style={{ fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginTop: 2 }}>{platformUserCount === null ? "—" : platformUserCount}</div></div><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>You share</div><div style={{ fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, marginTop: 2 }}>{myShareRate > 0 ? "Yes" : "No"}</div></div><div style={{ flex: 1, borderRadius: T.radiusMd, background: T.surfaceAlt, padding: "10px 12px" }}><div style={{ fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>Your rate</div><div style={{ fontSize: 18, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay, marginTop: 2 }}>{myShareRate >= creatorFilterMin && myShareRate <= creatorFilterMax ? "In range" : "Outside"}</div></div></div><div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ flex: 1 }}><div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>Between %</div><input
     type="number"
     min={0}
     max={7}

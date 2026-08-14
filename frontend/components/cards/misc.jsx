@@ -57,7 +57,41 @@ function ProfileToggle({ on, onToggle, label }) {
 // History, where the active Received/Paid tab should show just its
 // own number, not a combined summary. The Dashboard wallet card
 // doesn't pass it, so it keeps showing both, unchanged.
-function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null }) {
+// The bars default to white-on-transparent because this chart was written for
+// the wallet card, which is a dark purple gradient. Dropped onto History's
+// white surface unchanged, every bar and every day label was white on white —
+// present in the DOM, invisible on screen.
+//
+// `palette: "light"` is that same chart drawn for a light background: the paid
+// bars red and the received bars green, which is also the colour language the
+// Paid/Received tiles directly above it already use, so the chart and the
+// totals it summarises read as one thing.
+var DAILY_SPENDING_PALETTES = {
+  dark: {
+    paid: "#ffffff",
+    paidMuted: "rgba(255,255,255,0.5)",
+    received: "rgba(255,255,255,0.55)",
+    receivedMuted: "rgba(255,255,255,0.25)",
+    paidText: "inherit",
+    receivedText: "#34D399",
+    dot: "#ffffff",
+    dotMuted: "rgba(255,255,255,0.35)",
+    selectRing: "rgba(255,255,255,0.9)"
+  },
+  light: {
+    paid: T.negative,
+    paidMuted: "rgba(226,63,69,0.42)",
+    received: T.positive,
+    receivedMuted: "rgba(5,150,105,0.35)",
+    paidText: T.negative,
+    receivedText: T.positive,
+    dot: T.accent,
+    dotMuted: T.line,
+    selectRing: T.accent
+  }
+};
+function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null, palette = "dark" }) {
+  const C = DAILY_SPENDING_PALETTES[palette] || DAILY_SPENDING_PALETTES.dark;
   const [weekOffset, setWeekOffset] = useState8(0);
   const [selectedDay, setSelectedDay] = useState8(null);
   const maxOffset = weeks.length - 1;
@@ -102,7 +136,7 @@ function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null
   const weekTotal = totals[weekOffset];
   const max = Math.max(...days.flatMap((d) => [d.paid, d.received]), 1);
   const displayed = selectedDay !== null ? days[selectedDay] : weekTotal;
-  return <div style={{ position: "relative" }}><div style={{ display: "flex", justifyContent: focusDirection ? "flex-start" : "space-between", alignItems: "center" }}>{(!focusDirection || focusDirection === "paid") && <span style={{ fontSize: 15, fontWeight: 800 }}>−{symbol}{displayed.paid.toFixed(2)}</span>}{(!focusDirection || focusDirection === "received") && <span style={{ fontSize: 15, fontWeight: 800, color: "#34D399" }}>+{symbol}{displayed.received.toFixed(2)}</span>}</div><div
+  return <div style={{ position: "relative" }}><div style={{ display: "flex", justifyContent: focusDirection ? "flex-start" : "space-between", alignItems: "center" }}>{(!focusDirection || focusDirection === "paid") && <span style={{ fontSize: 15, fontWeight: 800, color: C.paidText }}>−{symbol}{displayed.paid.toFixed(2)}</span>}{(!focusDirection || focusDirection === "received") && <span style={{ fontSize: 15, fontWeight: 800, color: C.receivedText }}>+{symbol}{displayed.received.toFixed(2)}</span>}</div><div
     onPointerDown={handlePointerDown}
     onPointerMove={handlePointerMove}
     onPointerUp={handlePointerUp}
@@ -129,8 +163,8 @@ function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null
         width: 7,
         height: Math.max(3, d.paid / max * 34),
         borderRadius: 3,
-        background: highlighted ? "#ffffff" : "rgba(255,255,255,0.5)",
-        boxShadow: isSelected ? "0 0 0 1.5px rgba(255,255,255,0.9)" : "none",
+        background: highlighted ? C.paid : C.paidMuted,
+        boxShadow: isSelected ? `0 0 0 1.5px ${C.selectRing}` : "none",
         transition: "height 0.3s ease, background 0.15s ease"
       }}
     /><div
@@ -140,11 +174,11 @@ function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null
         width: 7,
         height: Math.max(3, d.received / max * 34),
         borderRadius: 3,
-        background: highlighted ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.25)",
-        boxShadow: isSelected ? "0 0 0 1.5px rgba(255,255,255,0.9)" : "none",
+        background: highlighted ? C.received : C.receivedMuted,
+        boxShadow: isSelected ? `0 0 0 1.5px ${C.selectRing}` : "none",
         transition: "height 0.3s ease, background 0.15s ease"
       }}
-    /></div><span style={{ fontSize: 9.5, fontWeight: 700, opacity: highlighted ? 0.95 : 0.6 }}>{SPENDING_DAY_LABELS[i]}</span></div>;
+    /></div><span style={{ fontSize: 9.5, fontWeight: 700, color: palette === "light" ? T.inkSoft : "inherit", opacity: highlighted ? 0.95 : 0.6 }}>{SPENDING_DAY_LABELS[i]}</span></div>;
   })}</div>{
     /* Two dots mark the hard two-week limit — just a quiet sense of
        "there's one more week back, and that's it". */
@@ -154,7 +188,7 @@ function DailySpendingChart({ weeks, totals, symbol = "$", focusDirection = null
       width: 5,
       height: 5,
       borderRadius: "50%",
-      background: i === weekOffset ? "#ffffff" : "rgba(255,255,255,0.35)"
+      background: i === weekOffset ? C.dot : C.dotMuted
     }}
   />)}</div></div>;
 }

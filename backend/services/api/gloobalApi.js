@@ -208,6 +208,26 @@ var GloobalApi = {
     return result.user || null;
   },
 
+  // --- Creator Share ------------------------------------------------------
+
+  // PATCH /api/creator/cashback-rate — the share of every payment this
+  // account hands back to whoever paid it. Sent as a decimal (1% = 0.01),
+  // which is how the backend stores it and how GET /api/profile/:symbolId
+  // and GET /api/users/resolve both return it; the UI works in percent and
+  // converts at this boundary rather than letting two units travel together.
+  //
+  // The backend caps it at 0.07 and answers 400 above that, 404 for an
+  // unknown ID. Neither is swallowed: My Share is a promise to every future
+  // payer, so "saved" must mean the server agreed.
+  async setCreatorCashbackRate(symbolId, cashbackRate) {
+    const result = await gloobalApiClient.patch("/api/creator/cashback-rate", {
+      symbolId,
+      cashbackRate
+    });
+    const saved = Number(result && result.cashbackRate);
+    return Number.isFinite(saved) ? saved : cashbackRate;
+  },
+
   // --- Device authentication (WebAuthn passkeys) ------------------------
   //
   // Thin passthroughs: the option payloads are @simplewebauthn/server
@@ -279,7 +299,8 @@ var GloobalApi = {
     }
   },
 
-  // GET /api/profile/count — how many accounts are registered platform-wide.
+  // GET /api/stats, falling back to GET /api/profile/count — how many
+  // accounts are registered platform-wide.
   //
   // Returns null, never 0, when the answer can't be had: this route is
   // newer than the rest of the surface and is not deployed on every
@@ -293,14 +314,28 @@ var GloobalApi = {
   //     res.json({ total: await User.countDocuments() }));
   // Both `total` and `totalUsers` are read because the route has been
   // written both ways.
+  //
+  // Two routes are tried because they are the same figure under two names and
+  // neither is on every deploy: /api/stats is the newer one, /api/profile/count
+  // the one that shipped first. The fallback runs ONLY on a 404 — "this server
+  // does not have that route" — never on an unreachable or a 5xx, so a cold
+  // start costs one 45s wait rather than two.
   async getPlatformUserCount() {
-    try {
-      const result = await gloobalApiClient.get("/api/profile/count", {
+    const readCount = async (path) => {
+      const result = await gloobalApiClient.get(path, {
         timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
       });
       if (!result) return null;
-      const total = Number(result.total ?? result.totalUsers ?? result.count);
+      const total = Number(result.totalUsers ?? result.total ?? result.count);
       return Number.isFinite(total) && total >= 0 ? total : null;
+    };
+    try {
+      return await readCount("/api/stats");
+    } catch (err) {
+      if (!(err instanceof GloobalApiError && err.status === 404)) return null;
+    }
+    try {
+      return await readCount("/api/profile/count");
     } catch (e) {
       return null;
     }

@@ -177,13 +177,13 @@ function GloobalId() {
   // aimed at one of those has no counterparty in MongoDB to credit and
   // stays a local simulation. Scan & Pay against a real scanned Gloobal
   // ID, or any receiver carrying a resolvable symbolId, goes remote.
-  const handleRemoteSend = async ({ amount, currency, receiver, pin: sendPin, payMethodLabel, memo, clientRequestId }) => {
+  const handleRemoteSend = async ({ txnId, amount, currency, receiver, pin: sendPin, payMethodLabel, memo, clientRequestId }) => {
     const senderSymbolId = registeredUser && registeredUser.symbolId;
     const receiverSymbolId = receiver && (receiver.gloobalId || receiver.symbolId || receiver.id);
     if (!senderSymbolId) return { ok: true, skipped: true, reason: "not signed in against the backend" };
     if (!receiverSymbolId) return { ok: true, skipped: true, reason: "receiver has no Gloobal ID" };
     try {
-      await GloobalApi.sendTransaction({
+      const result = await GloobalApi.sendTransaction({
         senderSymbolId,
         receiverSymbolId,
         amount,
@@ -191,6 +191,13 @@ function GloobalId() {
         note: memo || "",
         pin: sendPin,
         payMethod: payMethodLabel || "",
+        // The ID this device already minted for the payment, so the record
+        // MongoDB stores is the same one the sender's receipt, complaint
+        // window and location report are keyed by — and, because the
+        // receiver reads their history from that record, the same one the
+        // other side sees. The backend validates it and mints its own if it
+        // is malformed or already taken, so this is a request, not a claim.
+        referenceId: txnId || "",
         // The backend also runs a 15-second identical-resend guard; this
         // makes the dedup explicit rather than time-based.
         idempotencyKey: clientRequestId || ""
@@ -201,7 +208,16 @@ function GloobalId() {
       // backend also withholds cashback and can apply its own adjustments
       // this client never sees.
       setRefreshBalanceToken((n) => n + 1);
-      return { ok: true };
+      // What the server actually recorded, handed back so the receipt can
+      // quote the stored reference rather than assuming its own was kept,
+      // and can show the Creator Share the payee's account really charged.
+      const transaction = (result && result.transaction) || {};
+      return {
+        ok: true,
+        transactionId: transaction.referenceId || txnId || "",
+        cashback: Number(result && result.cashback) || 0,
+        cashbackRate: Number(result && result.cashbackRate) || 0
+      };
     } catch (err) {
       return { ok: false, reason: err.message };
     }
@@ -285,8 +301,40 @@ function GloobalId() {
       registered: Boolean(user),
       // fullName is the mobile number on accounts created before the name
       // step existed, and a name that is just the number is not a name.
-      recipientName: user ? (user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User") : null
+      recipientName: user ? (user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User") : null,
+      recipientMobile: (user && user.mobileNumber) || "",
+      // As a percent, the unit the rest of the app carries it in — the
+      // backend returns a decimal.
+      recipientShareRate: (Number(user && user.cashbackRate) || 0) * 100
     });
+  };
+  // A scanned Gloobal ID carrying no amount is an identity, not a bill. The
+  // useful thing to do with one is send to it, so it hands the resolved
+  // recipient straight to Send Money — which opens past its own search step,
+  // on the amount, with the person already filled in.
+  //
+  // Kept separate from the amount-bearing path above: a QR with an amount in
+  // it is a payment request and still pays in place, since the sender has
+  // nothing left to decide.
+  const [sendPrefillReceiver, setSendPrefillReceiver] = useState19(null);
+  const handleSendToScanned = () => {
+    if (!scanPendingPayment) return;
+    setSendPrefillReceiver({
+      // The scan carries no country of its own, so the sender's is the
+      // honest default — the same one the Send Money screen starts on.
+      country: dialCountry.name,
+      flag: dialCountry.flag,
+      iso: dialCountry.iso,
+      id: scanPendingPayment.gloobalId,
+      name: scanPendingPayment.recipientName || "Gloobal User",
+      mobileNumber: scanPendingPayment.recipientMobile || "",
+      currency: COUNTRY_CURRENCY[dialCountry.iso] || "USD",
+      shareRate: scanPendingPayment.recipientShareRate || 0
+    });
+    setShowScanScreen(false);
+    setScanPendingPayment(null);
+    setScanError(null);
+    setActiveScreen("send");
   };
   // Scan & Pay runs through the exact same canonical executeTransaction
   // lifecycle as Send Money and Pay a Business — no separate posting
@@ -665,6 +713,15 @@ function GloobalId() {
     };
   }, [stage, registeredUser, refreshBalanceToken]);
 
+  // Money this account RECEIVED, kept apart from what it sent.
+  //
+  // Every server row used to be appended to sendMoneyHistory regardless of
+  // which side of it this account was on, and the dashboard's Paid list is
+  // built from that state — so a payment somebody made TO you appeared in
+  // your Paid history, as money you had spent. The backend has always said
+  // which it is (`direction`, computed per viewer); the client was throwing
+  // the answer away.
+  const [receivedMoneyHistory, setReceivedMoneyHistory] = useState19([]);
   useEffect15(() => {
     if (stage !== "dashboard") return;
     const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
@@ -675,10 +732,17 @@ function GloobalId() {
         const { transactions } = await GloobalApi.getTransactionSummary(symbolId, "all");
         if (cancelled || !Array.isArray(transactions)) return;
         const mapped = transactions.map((row) => mapServerTransaction(row, symbolId));
-        setSendMoneyHistory((local) => {
+        const sent = mapped.filter((entry) => entry.direction !== "received");
+        const received = mapped.filter((entry) => entry.direction === "received");
+        // Both lists seed UNDER whatever this session already holds, keyed by
+        // txnId, for the same reason: a payment made moments ago is in local
+        // state and may not be in the fetched page yet.
+        const seedUnder = (local, rows) => {
           const seen = new Set(local.map((entry) => entry.txnId).filter(Boolean));
-          return local.concat(mapped.filter((entry) => !entry.txnId || !seen.has(entry.txnId)));
-        });
+          return local.concat(rows.filter((entry) => !entry.txnId || !seen.has(entry.txnId)));
+        };
+        setSendMoneyHistory((local) => seedUnder(local, sent));
+        setReceivedMoneyHistory((local) => seedUnder(local, received));
       } catch (e) {
         /* read-only; the dashboard works without it */
       }
@@ -1977,6 +2041,7 @@ function GloobalId() {
     profilePhoto={profilePhoto}
     onChangeProfilePhoto={setProfilePhoto}
     sendHistory={sendMoneyHistory}
+    receivedHistory={receivedMoneyHistory}
     bankBalance={bankBalance}
     assetSeeds={assetSeeds}
     onPayBusiness={handlePayBusiness}
@@ -2233,7 +2298,27 @@ function GloobalId() {
       cursor: "pointer"
     }}
   >
-                  Verify & {scanPendingPayment.amountCents > 0 ? "Pay" : "Confirm"}</button><button
+                  Verify & {scanPendingPayment.amountCents > 0 ? "Pay" : "Confirm"}</button>{
+    /* Only for a code that names somebody real and asks for nothing:
+       an unregistered ID has no account to send to, and a code with
+       an amount on it is already a bill to settle above. */
+  }{scanPendingPayment.registered && scanPendingPayment.amountCents === 0 && <button
+    onClick={handleSendToScanned}
+    className="v2-tap"
+    style={{
+      width: "100%",
+      marginTop: 10,
+      borderRadius: T.radiusMd,
+      padding: "13px 0",
+      border: `1.5px solid ${T.accent}`,
+      background: "none",
+      color: T.accent,
+      fontSize: 13.5,
+      fontWeight: 800,
+      cursor: "pointer"
+    }}
+  >
+                  Send money to this ID</button>}<button
     onClick={() => setScanPendingPayment(null)}
     className="v2-tap"
     style={{ width: "100%", border: "none", background: "none", padding: "12px 0 0", fontSize: 12.5, color: T.inkFaint, cursor: "pointer" }}
@@ -2267,8 +2352,12 @@ function GloobalId() {
     onVerify={handleScanBiometricVerify}
     scanning={scanBiometricScanning}
   />}{activeScreen === "send" && <div style={{ position: "fixed", inset: 0, zIndex: 190, overflowY: "auto", WebkitOverflowScrolling: "touch" }}><SendMoney_default
-    onClose={requestCloseActiveScreen}
+    onClose={() => {
+      setSendPrefillReceiver(null);
+      requestCloseActiveScreen();
+    }}
     sender={{ ...dialCountry, phoneNumber }}
+    prefillReceiver={sendPrefillReceiver}
     history={sendMoneyHistory}
     onSendComplete={handleSendMoneyComplete}
     onExecuteTransaction={handleExecuteTransaction}

@@ -119,7 +119,7 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
     /* Daily trend — same DailySpendingChart the wallet card uses,
        scoped to just this history's data, giving a quick "average
        day vs a bigger day" read before scrolling the list below. */
-  }<div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px", marginBottom: 14 }}><DailySpendingChart weeks={historyDailyTrend.weeks} totals={historyDailyTrend.totals} symbol={ccy} focusDirection={historyTab === "sending" ? "paid" : "received"} /></div>{
+  }<div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px", marginBottom: 14 }}><DailySpendingChart weeks={historyDailyTrend.weeks} totals={historyDailyTrend.totals} symbol={ccy} focusDirection={historyTab === "sending" ? "paid" : "received"} palette="light" /></div>{
     /* Method filter — All / Bank / PayLater / Coin, applied to
        whichever panel (Receiving/Sending) is currently active. The
        Received/Paid direction toggle itself lives in the header
@@ -163,7 +163,10 @@ function TransactionHistoryScreen({ isActive, sendHistory, receiveHistory = [], 
   ].map((col) => {
     const filteredRows = historyMethodFilter === "all" ? col.rows : col.rows.filter((t) => t.method === historyMethodFilter);
     return <div key={col.key} style={{ flex: "0 0 100%", scrollSnapAlign: "start", minWidth: 0 }}><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{filteredRows.length === 0 ? <div style={{ padding: "20px 16px", textAlign: "center", fontSize: 12, color: T.inkFaint }}>Nothing {historyPeriodMeta(historyPeriod).emptyLabel}</div> : filteredRows.map((t, i) => <TransactionRow
-      key={`${t.name}-${t.date}`}
+      // txnId first: the received list is now two sources merged (Creator
+      // Share grants and real incoming payments), so name+date alone can
+      // repeat across them and React would treat two distinct rows as one.
+      key={t.txnId || `${t.name}-${t.date}-${i}`}
       t={t}
       chip={col.chip}
       color={col.color}

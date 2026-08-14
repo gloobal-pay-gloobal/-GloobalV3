@@ -80,7 +80,7 @@ function identityDisplayValue(profile, mode) {
       return profile.name;
   }
 }
-function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onSendComplete, onExecuteTransaction, onRemoteSend }) {
+function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = [], onOpenPaidHistory, onSendComplete, onExecuteTransaction, onRemoteSend }) {
   const [top, setTop] = useState15(() => buildSenderProfile(sender));
   const [bottom, setBottom] = useState15(() => buildLocalReceiverPlaceholder(buildSenderProfile(sender)));
   const [amount, setAmount] = useState15("");
@@ -108,7 +108,7 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     setReceipt(null);
     setTransactionStatus("idle");
   });
-  const [searchStage, setSearchStage] = useState15("dialing");
+  const [searchStage, setSearchStage] = useState15(() => prefillReceiver ? "found" : "dialing");
   // Recipient lookup against GET /api/users/resolve. searchError carries
   // the inline "no such user" message; searchBusy blocks a second lookup
   // and disables Search while one is in flight.
@@ -141,6 +141,33 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     () => convert(amount, bottom.currency, top.currency),
     [amount, top.currency, bottom.currency]
   );
+  // A recipient handed in from outside — currently the Scan screen, after it
+  // has decoded a Gloobal QR and resolved the ID against
+  // GET /api/users/resolve. It has already done the lookup this screen's own
+  // search step would do, so repeating it would mean scanning somebody's code
+  // and then being asked to dial the ID off it by hand.
+  //
+  // Applied through the same setBottom/searchStage pair resolveSearch uses, so
+  // a prefilled recipient and a dialled one are the same state from here on —
+  // the screen opens on the amount, and openSearch() still clears it, which is
+  // how the person changes their mind about who they are paying.
+  useEffect13(() => {
+    if (!prefillReceiver) return;
+    setBottom({
+      country: prefillReceiver.country,
+      flag: prefillReceiver.flag,
+      id: prefillReceiver.id || "",
+      name: prefillReceiver.name || "Gloobal User",
+      phone: maskMobileNumber(prefillReceiver.mobileNumber),
+      currency: prefillReceiver.currency || top.currency,
+      // Already a percent by the time it arrives (see handleSendToScanned).
+      shareRate: Number(prefillReceiver.shareRate) || 0
+    });
+    setSearchStage("found");
+    setFoundDisplayMode("name");
+    setTopOpen(false);
+    setBottomOpen(true);
+  }, [prefillReceiver]);
   useEffect13(() => {
     return () => {
       clearTimeout(toastTimer.current);
@@ -172,6 +199,13 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     // with no server identity, so unless the payment is aimed at a real
     // registered Gloobal ID there is no counterparty for the backend to
     // credit. Those still run as a local simulation, exactly as before.
+    // What the server confirmed, once it has. Declared out here because
+    // everything below — the ledger post, the history row and the receipt —
+    // must describe the transaction the BACKEND recorded, not the one this
+    // screen guessed at before calling.
+    let confirmedTxnId = txnId;
+    let confirmedShareRatePercent = (bottom.shareRate ?? 0);
+    let confirmedCashback = null;
     if (onRemoteSend) {
       const remote = await onRemoteSend({
         txnId,
@@ -193,6 +227,20 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
         setTimeout(() => setTransactionStatus("idle"), 1800);
         return;
       }
+      // A `skipped` send never reached the backend, so it has nothing to
+      // confirm and the locally-minted values stand.
+      if (remote && remote.ok && !remote.skipped) {
+        // Normally the same value this device sent; different only if the
+        // backend had to mint its own (see resolveTransactionReference).
+        if (remote.transactionId) confirmedTxnId = remote.transactionId;
+        // The Creator Share the payee's account actually charged, as a
+        // percent. The server is the authority on this — it reads the rate
+        // off the payee's own record at the moment of payment, which is not
+        // necessarily the rate this screen saw when it looked the recipient
+        // up.
+        if (Number.isFinite(remote.cashbackRate)) confirmedShareRatePercent = remote.cashbackRate * 100;
+        if (Number.isFinite(remote.cashback)) confirmedCashback = remote.cashback;
+      }
     }
     // ONE call: risk-check, posting, provenance, complaint window, and
     // (if eligible) the asset-seed grant all happen atomically inside
@@ -202,12 +250,12 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
     // financial validity never waits on or depends on it.
     const result = onExecuteTransaction
       ? onExecuteTransaction({
-          txnId,
+          txnId: confirmedTxnId,
           amount: convertedAmount,
           payMethodLabel: payMethod,
           memo: `Send Money to ${bottom.name}`,
           name: bottom.name,
-          shareRatePercent: bottom.shareRate ?? 0,
+          shareRatePercent: confirmedShareRatePercent,
           time: formatClockTime(now),
           now,
           clientRequestId: requestIdRef.current
@@ -232,15 +280,15 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
       convertedAmount,
       payMethod,
       now,
-      shareRatePercent: bottom.shareRate ?? 0,
+      shareRatePercent: confirmedShareRatePercent,
       ledgerRecordId: result.ledgerRecordId,
-      txnId
+      txnId: confirmedTxnId
     });
     // Held no longer than the send it authorised.
     verifiedPinRef.current = null;
     // The receipt is set before the status flips, so "completed" is never
     // observable without one to show for it.
-    setReceipt(receipt2);
+    setReceipt(confirmedCashback === null ? receipt2 : Object.assign({}, receipt2, { cashback: confirmedCashback }));
     setTransactionStatus("completed");
     if (onSendComplete) onSendComplete(historyEntry);
   }
@@ -430,7 +478,14 @@ function SendMoneyScreen({ onClose, sender, history = [], onOpenPaidHistory, onS
       phone: maskMobileNumber(user.mobileNumber) || (searchMode === "mobile" ? `${c.dialCode} ${grouped}` : ""),
       currency: COUNTRY_CURRENCY[c.iso] || "USD",
       // The receiver's real rate off their own account, not a random one.
-      shareRate: Number(user.cashbackRate) || 0
+      //
+      // Converted to a percent here, at the boundary. The backend stores and
+      // returns a decimal (1% = 0.01) and every consumer of `shareRate` in
+      // this app — the Creator Share readout below, the receipt, the asset
+      // seed's shareRatePercent — works in percent, so carrying the decimal
+      // through showed a 1% creator as "0.01%" and posted a hundredth of the
+      // share they had actually set.
+      shareRate: (Number(user.cashbackRate) || 0) * 100
     });
     setSearchStage("found");
     setFoundDisplayMode("name");
