@@ -625,6 +625,12 @@ function GloobalId() {
   // Gloobal ID belongs to somebody. Drives the "Account found" chip and is
   // the gate on advancing to the PIN step.
   const [loginIdResolved, setLoginIdResolved] = useState19(false);
+  // What the PIN step signs in with — a Gloobal ID or a full mobile number,
+  // whichever the person entered. Held separately from `secureId` because on
+  // the mobile path there is no Gloobal ID to put there yet: the backend
+  // resolves the number behind the PIN, which is what stopped that resolution
+  // being an unauthenticated lookup anyone could run.
+  const [loginIdentifier, setLoginIdentifier] = useState19("");
   // Registration only: the biometric step's own message, so a device with
   // no sensor (or a declined prompt) explains itself on that screen rather
   // than through the root error banner.
@@ -685,6 +691,7 @@ function GloobalId() {
     // so it needs no fresh resolve to be trusted as an existing account —
     // it just skips straight to the PIN when submitted.
     if (restored.user.symbolId) setLoginIdResolved(true);
+    if (restored.user.symbolId) setLoginIdentifier(restored.user.symbolId);
     // Name and photo come back with it, so a returning person sees their
     // own account rather than a placeholder while the dashboard loads.
     const storedProfile = loadLocalProfile(restored.user.symbolId);
@@ -824,22 +831,23 @@ function GloobalId() {
     }
     let cancelled = false;
     (async () => {
-      try {
-        const user = await GloobalApi.resolveUser(secureId);
-        if (cancelled) return;
-        setRegisteredUser(user);
+      // Asks only whether the ID is taken, not who has it. This used to call
+      // GET /api/users/resolve, which hands back a name and a mobile number —
+      // before anybody had signed in, so typing twelve symbols into the login
+      // screen was a way to read a stranger's contact details. The chip only
+      // ever needed the boolean.
+      const { available } = await GloobalApi.checkSymbolAvailability(secureId);
+      if (cancelled) return;
+      if (available === false) {
         setLoginIdResolved(true);
         setAuthError(null);
-      } catch (err) {
-        if (cancelled) return;
-        setLoginIdResolved(false);
-        // Only a definite 404 is reported. A cold start or a 5xx is not an
-        // answer about this ID, and saying "no account found" over one
-        // would be telling somebody their own account does not exist.
-        if (err instanceof GloobalApiError && err.status === 404) {
-          setAuthError("No account found for this Gloobal ID.");
-        }
+        return;
       }
+      setLoginIdResolved(false);
+      // Only a definite answer is reported. `null` means the lookup could not
+      // tell — a cold start or a 5xx — and saying "no account found" over one
+      // would be telling somebody their own account does not exist.
+      if (available === true) setAuthError("No account found for this Gloobal ID.");
     })();
     return () => {
       cancelled = true;
@@ -860,19 +868,14 @@ function GloobalId() {
     // the PIN step that follows has a real symbolId to authenticate.
     if (isLoginAttempt && loginEntryMode === "mobile") {
       if (!loginMobileComplete || authBusy) return;
-      setAuthBusy(true);
+      // Carried to the PIN step as-is. It used to be resolved to a Gloobal ID
+      // here, through GET /api/users/resolve, which meant an unauthenticated
+      // caller could map any phone number to the account behind it. POST
+      // /api/login now accepts the number itself and does that resolution
+      // behind the PIN, so there is nothing to look up first.
+      setLoginIdentifier(`${effectiveLoginCountry.dialCode || ""}${loginMobileBuffer.replace(/\D/g, "")}`);
       setAuthError(null);
-      try {
-        const identifier = `${effectiveLoginCountry.dialCode || ""}${loginMobileBuffer.replace(/\D/g, "")}`;
-        const user = await GloobalApi.resolveUser(identifier);
-        setRegisteredUser(user);
-        setSecureId(user.symbolId || "");
-        flipTo("loginAuth");
-      } catch (err) {
-        setAuthError(err.message);
-      } finally {
-        setAuthBusy(false);
-      }
+      flipTo("loginAuth");
       return;
     }
     if (secureId.length !== SECURE_ID_LENGTH || authBusy) return;
@@ -886,24 +889,25 @@ function GloobalId() {
       // came back as a real account — no reason to spend a second
       // GET /api/users/resolve (and a second 45s cold-start timeout) on
       // the same question.
-      if (loginIdResolved && registeredUser && registeredUser.symbolId === secureId) {
+      setLoginIdentifier(secureId);
+      if (loginIdResolved) {
         flipTo("loginAuth");
         return;
       }
       setAuthBusy(true);
       setAuthError(null);
       try {
-        const user = await GloobalApi.resolveUser(secureId);
-        setRegisteredUser(user);
-        setLoginIdResolved(true);
+        // Existence only — the account's details come back from /api/login,
+        // after the PIN. A `null` answer (cold start, 5xx) is not evidence the
+        // ID is wrong and must not block the one way forward.
+        const { available } = await GloobalApi.checkSymbolAvailability(secureId);
+        if (available === true) {
+          setLoginIdResolved(false);
+          setAuthError("No account found for this Gloobal ID.");
+          return;
+        }
+        setLoginIdResolved(available === false);
         flipTo("loginAuth");
-      } catch (err) {
-        setLoginIdResolved(false);
-        setAuthError(
-          err instanceof GloobalApiError && err.status === 404
-            ? "No account found for this Gloobal ID."
-            : err.message
-        );
       } finally {
         setAuthBusy(false);
       }
@@ -1068,9 +1072,12 @@ function GloobalId() {
     setAuthBusy(true);
     setAuthError(null);
     try {
-      const symbolId = (registeredUser && registeredUser.symbolId) || secureId;
+      const symbolId = loginIdentifier || (registeredUser && registeredUser.symbolId) || secureId;
       const result = await GloobalApi.login(symbolId, loginAuthPin);
       setRegisteredUser(result.user);
+      // The backend resolved a mobile number to its account, so this is the
+      // first point the Gloobal ID is known on that path.
+      if (result.user && result.user.symbolId) setSecureId(result.user.symbolId);
       GloobalApi.saveSession(result.user, phoneNumber);
       gloobalSetBiometricSymbolId(result.user.symbolId || symbolId);
       setLoginAuthPin("");
@@ -1376,6 +1383,7 @@ function GloobalId() {
     setPhoneAlreadyRegistered(false);
     setTakenIdSuggestions([]);
     setLoginIdResolved(false);
+    setLoginIdentifier("");
     setBiometricNotice(null);
     setDocumentedName("");
     setDocType(null);

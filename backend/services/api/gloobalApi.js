@@ -77,6 +77,11 @@ var GloobalApi = {
     const result = await gloobalApiClient.post("/api/register-symbol", payload, {
       timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
     });
+    // The account exists from this moment, and the registration OTP that
+    // authorised it has been consumed server-side — so this token is the only
+    // credential the flow carries forward. POST /api/pin/set, the very next
+    // step, requires it.
+    if (result && result.token) gloobalAuthTokenSave(result.token);
     return {
       user: result.user || {
         symbolId: payload.symbolId,
@@ -105,16 +110,25 @@ var GloobalApi = {
   },
 
   // POST /api/login — Secure ID + PIN.
-  async login(symbolId, pin) {
+  //
+  // `identifier` is a Gloobal ID or a full mobile number — the backend resolves
+  // either, behind the PIN. Logging in by phone used to mean calling
+  // GET /api/users/resolve first to turn the number into a Gloobal ID, which is
+  // an unauthenticated phone-number-to-account oracle; that lookup is now a
+  // signed-in operation and this route does the resolution itself.
+  async login(identifier, pin) {
     gloobalRateCheck("login");
     try {
       const result = await gloobalApiClient.post(
         "/api/login",
-        { symbolId, secureId: symbolId, pin },
+        { symbolId: identifier, secureId: identifier, identifier, pin },
         { timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS }
       );
       gloobalRateClear("login");
-      return { user: result.user || { symbolId } };
+      // Every protected route needs this. Stored before the caller sees the
+      // user, so nothing that runs on a successful login can race it.
+      if (result && result.token) gloobalAuthTokenSave(result.token);
+      return { user: result.user || { symbolId: identifier } };
     } catch (err) {
       // Unreachable is a cold backend, not a wrong Secure ID or PIN. It
       // must not burn the local throttle, or one slow cold start locks
@@ -145,8 +159,14 @@ var GloobalApi = {
 
   // Is this Gloobal ID still free to claim?
   //
-  // Built on resolve rather than a new route: an ID that resolves to
-  // somebody is by definition taken. Returns available: true | false |
+  // GET /api/users/available, which answers with one boolean. This used to be
+  // built on /api/users/resolve — an ID that resolves to somebody is by
+  // definition taken — but that route returns a name, a mobile number and a
+  // cashback rate, and registration has to run before anybody is signed in. So
+  // the availability check was an unauthenticated way to turn a guessed ID into
+  // somebody's contact details. Resolve is now signed-in only.
+  //
+  // Returns available: true | false |
   // null, where null means "couldn't tell" — a cold start or 5xx is not an
   // answer, and returning true there would show a confident "Available ✓"
   // over an ID that might well be taken. Registration stays permissive and
@@ -154,13 +174,18 @@ var GloobalApi = {
   // screen that *displays* availability must not claim one on null.
   async checkSymbolAvailability(symbolId) {
     try {
-      const result = await gloobalApiClient.get(`/api/users/resolve?identifier=${encodeURIComponent(symbolId)}`, {
+      const result = await gloobalApiClient.get(`/api/users/available?symbolId=${encodeURIComponent(symbolId)}`, {
         timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
       });
-      return { available: !result.user, user: result.user || null };
+      if (!result || typeof result.available !== "boolean") return { available: null, user: null };
+      return { available: result.available, user: null };
     } catch (err) {
-      // A 404 is a real answer: the backend looked and found nobody.
-      if (err instanceof GloobalApiError && err.status === 404) return { available: true, user: null };
+      // Every failure is "couldn't tell", 404 included. This route answers 200
+      // for an unknown ID — that is the whole point of it — so a 404 can only
+      // mean the server does not have the route at all, which is true of any
+      // backend deployed before it existed. Reading that as "free to claim"
+      // would tell somebody their own Gloobal ID does not exist and block them
+      // at their own login screen.
       return { available: null, user: null };
     }
   },
@@ -173,12 +198,15 @@ var GloobalApi = {
   // Returns true | false | null.
   async referralCodeExists(symbolId) {
     try {
-      const result = await gloobalApiClient.get(`/api/users/resolve?identifier=${encodeURIComponent(symbolId)}`, {
+      const result = await gloobalApiClient.get(`/api/users/available?symbolId=${encodeURIComponent(symbolId)}`, {
         timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
       });
-      return Boolean(result.user);
+      if (!result || typeof result.available !== "boolean") return null;
+      return !result.available;
     } catch (err) {
-      if (err instanceof GloobalApiError && err.status === 404) return false;
+      // Same reasoning as above: a 404 here is a missing route, not a missing
+      // account, and rejecting a genuine referral code over one would be worse
+      // than carrying it forward — which the backend tolerates anyway.
       return null;
     }
   },
@@ -261,7 +289,11 @@ var GloobalApi = {
 
   // POST /api/passkey/auth/verify → { verified, user }
   async passkeyAuthVerify(symbolId, response) {
-    return gloobalApiClient.post("/api/passkey/auth/verify", { symbolId, response });
+    const result = await gloobalApiClient.post("/api/passkey/auth/verify", { symbolId, response });
+    // Signing in by fingerprint alone has to produce a session too, or the
+    // dashboard loads with no token and every protected read answers 401.
+    if (result && result.token) gloobalAuthTokenSave(result.token);
+    return result;
   },
 
   // --- Server-side face templates ---------------------------------------
@@ -476,5 +508,14 @@ var GloobalApi = {
 
   saveSession: gloobalSessionSave,
   loadSession: gloobalSessionLoad,
-  clearSession: gloobalSessionClear
+  clearSession: gloobalSessionClear,
+  authToken: gloobalAuthToken,
+  saveAuthToken: gloobalAuthTokenSave,
+  clearAuthToken: gloobalAuthTokenClear,
+  // Whether this device currently holds a credential the backend will accept.
+  // Not proof it is still valid — only the server can say that — but enough to
+  // tell "never signed in" from "signed in, token may have expired".
+  hasAuthToken() {
+    return Boolean(gloobalAuthToken());
+  }
 };

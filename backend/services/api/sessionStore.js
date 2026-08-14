@@ -3,18 +3,25 @@
 // Client-side session persistence. Ported from the original Gloobal
 // frontend's services/session.js.
 //
-// The backend issues no token and no cookie, so the signed-in identity is
-// just the user object the API returned, held in React state — and that
-// state is lost on every remount: a refresh, a PWA relaunch, or the OS
-// restoring a backgrounded tab all drop the person back at the phone
-// screen, which reads as "it logged me out by itself".
+// Holds two different things, and the difference matters.
 //
-// This stores the minimum needed to re-enter on the next load. It is NOT a
-// security token: there is no server session to validate it against and
-// anyone can read or edit it in devtools. It only restores *whose* account
-// to re-authenticate against — reaching the dashboard from a restored
-// session still costs a PIN or biometric check, and every real action still
-// hits the backend with symbolId exactly as before.
+// `user` is the identity to re-enter as on the next load — a refresh, a PWA
+// relaunch, or the OS restoring a backgrounded tab would otherwise drop the
+// person back at the phone screen, which reads as "it logged me out by
+// itself". That part is not a credential: anyone can read or edit it in
+// devtools, and reaching the dashboard from a restored session still costs a
+// PIN or a biometric check.
+//
+// `token` IS a credential. The backend used to issue none — every route took a
+// symbolId out of the request and trusted it — so a Gloobal ID was both a
+// public address and the only thing protecting the account. The API now mints
+// a signed bearer token in exchange for a real credential (PIN at /api/login,
+// a verified OTP at registration, or a WebAuthn assertion), and every route
+// that touches an account requires it.
+//
+// Treat it as a password: it is what an attacker with devtools access to this
+// origin would take. It is scoped to this origin by localStorage, cleared on
+// sign-out, and expires server-side after seven days.
 
 var GLOOBAL_SESSION_KEY = "gloobal.session.v1";
 
@@ -55,6 +62,12 @@ function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
       JSON.stringify({
         user,
         phoneNumber: phoneNumber || "",
+        // Carried across a save for the SAME account — this function is called
+        // at several points that know the user but not the token, and dropping
+        // it there would sign the person out mid-flow. A different account
+        // signing in on this device gets no token until it earns its own,
+        // which is the one case where inheriting would be a real leak.
+        token: (sameAccount && previous.token) || null,
         savedAt: Date.now(),
         // Same account-scoping as the flag below: a new account signing in
         // on this device starts its own "logged in at", not the previous
@@ -85,11 +98,48 @@ function gloobalSessionLoad() {
     return {
       user: parsed.user,
       phoneNumber: parsed.phoneNumber || "",
-      biometricEnrolled: Boolean(parsed.biometricEnrolled)
+      biometricEnrolled: Boolean(parsed.biometricEnrolled),
+      token: parsed.token || null
     };
   }
   if (parsed) gloobalSessionClear();
   return null;
+}
+
+// --- The bearer token --------------------------------------------------
+//
+// Read on every request by gloobalApiRequest (httpClient.js, emitted above
+// this file — these are function declarations, which hoist across the whole
+// concatenated scope, so the earlier module can call them).
+//
+// Deliberately read from storage rather than cached in a variable: the token
+// changes on login, on registration, on a PIN reset and on a passkey sign-in,
+// and a stale copy in a module-level variable would send the previous
+// account's credential after a switch.
+
+// Stored inside the session blob rather than under a key of its own, so
+// signing out cannot clear one and leave the other behind.
+function gloobalAuthTokenSave(token) {
+  const parsed = gloobalSessionReadRaw();
+  try {
+    window.localStorage.setItem(
+      GLOOBAL_SESSION_KEY,
+      JSON.stringify(Object.assign({ savedAt: Date.now() }, parsed || {}, { token: token || null }))
+    );
+  } catch (e) {
+    // No storage. The app still works for this page view — gloobalApiRequest
+    // reads the token per call and will simply find none after a reload,
+    // which surfaces as being asked to sign in again.
+  }
+}
+
+function gloobalAuthToken() {
+  const parsed = gloobalSessionReadRaw();
+  return (parsed && parsed.token) || null;
+}
+
+function gloobalAuthTokenClear() {
+  gloobalAuthTokenSave(null);
 }
 
 // Flip the biometric-enrolment flag on its own, without needing the user

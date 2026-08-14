@@ -103,10 +103,21 @@ async function gloobalApiRequest(method, path, body, options) {
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (opts.signal) opts.signal.addEventListener("abort", () => controller.abort());
 
+  // The bearer token the backend now requires on every route that touches an
+  // account. Read per request rather than captured once: it changes on login,
+  // registration, PIN reset and passkey sign-in, and a cached copy would send
+  // the previous account's credential after a switch.
+  //
+  // Sent when there is one, omitted when there is not, so the pre-sign-in
+  // routes (OTP, registration, login, availability) are unaffected.
+  const headers = { "Content-Type": "application/json" };
+  const authToken = typeof gloobalAuthToken === "function" ? gloobalAuthToken() : null;
+  if (authToken && !opts.anonymous) headers.Authorization = `Bearer ${authToken}`;
+
   try {
     const res = await fetch(gloobalApiUrl(path), {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal
     });
@@ -115,6 +126,15 @@ async function gloobalApiRequest(method, path, body, options) {
     const parsed = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
 
     if (!res.ok) {
+      // 401 means this token is gone — expired, or signed by a key the server
+      // no longer has (AUTH_TOKEN_SECRET is regenerated at boot when the
+      // environment does not set one, so a restart invalidates every token).
+      // Dropping it here stops every subsequent call re-sending a credential
+      // that is known not to work, and lets the app fall back to its sign-in
+      // flow instead of looping on failures it cannot explain.
+      if (res.status === 401 && authToken && typeof gloobalAuthTokenClear === "function") {
+        gloobalAuthTokenClear();
+      }
       const message = (parsed && parsed.message) || `Request to ${path} failed with ${res.status}`;
       throw new GloobalApiError(message, res.status, parsed);
     }
