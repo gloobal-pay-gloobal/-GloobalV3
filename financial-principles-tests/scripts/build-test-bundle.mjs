@@ -39,6 +39,7 @@ const DOMAIN_MODULES = [
   "backend/domain/accounts/entities/UserAccount.js",
   "backend/domain/accounts/entities/ReserveAccount.js",
   "backend/domain/accounts/AccountRegistry.js",
+  "backend/domain/coin/CoinService.js",
   "backend/domain/liquidity/entities/LiquidityPool.js",
   "backend/domain/liquidity/LiquidityService.js",
   "backend/domain/essentials/EssentialsPoolService.js",
@@ -124,9 +125,9 @@ const EXPORTS = [
   "LOCATION_STATUS", "LOCATION_STALE_AFTER_MS_DEFAULT", "LocationObservation", "unknownObservation", "asObservation", "withFreshness",
   "resolveLocationLabel", "captureBrowserGeo", "LOCATION_MOCK_CITIES",
   "COMPLAINT_WINDOW_MINUTES_DEFAULT", "DISPUTE_RECEIVER_RESPONSE_HOURS_DEFAULT",
-  "CAPABILITY_KEY", "deriveCapabilityStates",
+  "CAPABILITY_KEY", "deriveCapabilityStates", "deriveProductServices", "SERVICE_STATUS",
   "EssentialsService", "EssentialsGrant", "EssentialsPoolService", "TransactionOrchestrator", "ProvenanceService", "DisputeService",
-  "LiquidityService", "RiskEngine", "SettlementEngine", "PayLaterService", "CreatorShareService",
+  "CoinService", "COIN_CURRENCY", "LiquidityService", "RiskEngine", "SettlementEngine", "PayLaterService", "CreatorShareService",
   "DIAL_SYMBOLS", "TXN_ID_LENGTH", "genTxnId", "genSuggestedId",
   "QR_TOTAL_LENGTH", "QR_ID_LENGTH", "QR_MAX_AMOUNT_CENTS", "encodeGloobalQR", "decodeGloobalQR"
 ];

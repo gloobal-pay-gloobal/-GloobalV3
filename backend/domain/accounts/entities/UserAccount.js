@@ -1,8 +1,13 @@
 // src/domain/accounts/entities/UserAccount.js
-function createUserAccount(userId, currency = "INR") {
+function createUserAccount(userId, currency = "INR", coinCurrency = "GC") {
   return {
     userId,
     bank: new LedgerAccount({ id: `user:${userId}:bank`, type: ACCOUNT_TYPE.ASSET, name: "Gloobal Bank", currency, ownerId: userId }),
+    // Gloobal Coin held by this account. An ASSET, like the bank account, and
+    // denominated in GC rather than the account's fiat currency — that is what
+    // stops a coin figure being added to a rupee one anywhere downstream, since
+    // Money refuses arithmetic across currencies outright.
+    coin: new LedgerAccount({ id: `user:${userId}:coin`, type: ACCOUNT_TYPE.ASSET, name: "Gloobal Coin", currency: coinCurrency, ownerId: userId }),
     paylaterPayable: new LedgerAccount({ id: `user:${userId}:paylater-payable`, type: ACCOUNT_TYPE.LIABILITY, name: "PayLater Payable", currency, ownerId: userId }),
     essentials: new LedgerAccount({ id: `user:${userId}:essentials`, type: ACCOUNT_TYPE.ASSET, name: "Essentials Wallet", currency, ownerId: userId }),
     // ASSET, not INCOME: this is a settleable balance (money the user

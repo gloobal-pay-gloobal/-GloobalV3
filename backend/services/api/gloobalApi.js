@@ -504,6 +504,105 @@ var GloobalApi = {
     };
   },
 
+  // --- Gloobal Coin -----------------------------------------------------
+  //
+  // Fully backed: a coin exists only because the same amount of prototype fiat
+  // was moved into the reserve, and redeeming hands it back. The server holds
+  // the balances and the reserve; these are the four calls that move them.
+  //
+  // Every one of them returns the account's post-operation figures, which is
+  // what lets the caller reconcile the local ledger from the response instead
+  // of issuing a second read that could disagree with what just happened.
+
+  // GET /api/coin/:symbolId — this account's coin position and the supply it
+  // sits inside.
+  async getCoin(symbolId) {
+    const result = await gloobalApiClient.get(`/api/coin/${encodeURIComponent(symbolId)}`);
+    return {
+      coinBalance: Number(result.coinBalance) || 0,
+      balance: Number(result.balance) || 0,
+      reserve: Number(result.reserve) || 0,
+      issued: Number(result.issued) || 0,
+      coinCurrency: result.coinCurrency || "GC",
+      reserveCurrency: result.reserveCurrency || "INR"
+    };
+  },
+
+  // GET /api/coin/supply — public, and the only honest source for the claim
+  // that the coin is backed. `backed` is the server comparing three
+  // independently maintained figures, not a constant.
+  //
+  // Returns null rather than a zeroed object when the read fails: 0 issued
+  // against 0 reserve is a real and valid state (nobody has minted yet), so a
+  // failure that rendered as one would be indistinguishable from the truth.
+  async getCoinSupply() {
+    try {
+      const result = await gloobalApiClient.get("/api/coin/supply", {
+        timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
+      });
+      if (!result || typeof result.backed !== "boolean") return null;
+      return {
+        reserve: Number(result.reserve) || 0,
+        issued: Number(result.issued) || 0,
+        heldByAccounts: Number(result.heldByAccounts) || 0,
+        holders: Number(result.holders) || 0,
+        backed: result.backed === true,
+        coinCurrency: result.coinCurrency || "GC",
+        reserveCurrency: result.reserveCurrency || "INR"
+      };
+    } catch (err) {
+      return null;
+    }
+  },
+
+  // POST /api/coin/mint — fiat out of the bank balance, coin in.
+  async coinMint(symbolId, amount) {
+    const result = await gloobalApiClient.post("/api/coin/mint", { symbolId, amount });
+    return {
+      minted: Number(result.minted) || 0,
+      balance: Number(result.balance) || 0,
+      coinBalance: Number(result.coinBalance) || 0,
+      reserve: Number(result.reserve) || 0,
+      issued: Number(result.issued) || 0,
+      referenceId: result.referenceId || null
+    };
+  },
+
+  // POST /api/coin/redeem — the exact inverse.
+  async coinRedeem(symbolId, amount) {
+    const result = await gloobalApiClient.post("/api/coin/redeem", { symbolId, amount });
+    return {
+      redeemed: Number(result.redeemed) || 0,
+      balance: Number(result.balance) || 0,
+      coinBalance: Number(result.coinBalance) || 0,
+      reserve: Number(result.reserve) || 0,
+      issued: Number(result.issued) || 0,
+      referenceId: result.referenceId || null
+    };
+  },
+
+  // POST /api/coin/send — coin to another Gloobal ID. PIN-gated, because
+  // unlike mint and redeem this one has a counterparty and cannot be undone
+  // from this side.
+  async coinSend(senderSymbolId, receiverSymbolId, amount, pin, note) {
+    const key = `coin-send:${senderSymbolId}`;
+    gloobalRateCheck(key);
+    const result = await gloobalApiClient.post("/api/coin/send", {
+      senderSymbolId,
+      receiverSymbolId,
+      amount,
+      pin,
+      note: note || ""
+    });
+    gloobalRateClear(key);
+    return {
+      sent: Number(result.sent) || 0,
+      coinBalance: Number(result.coinBalance) || 0,
+      referenceId: result.referenceId || null,
+      receiver: result.receiver || null
+    };
+  },
+
   // --- Session (local, not server-issued) -------------------------------
 
   saveSession: gloobalSessionSave,

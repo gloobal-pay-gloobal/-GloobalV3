@@ -165,6 +165,22 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const [showAboutUs, setShowAboutUs] = useState14(false);
   const requestCloseAboutUs = useBackClose(showAboutUs, () => setShowAboutUs(false));
   const [gloobalCoinInterested, setGloobalCoinInterested] = useState14(false);
+  // Gloobal Coin. The balance and the history are read from the ledger rather
+  // than held here, so they cannot drift from what was posted; only the things
+  // that genuinely are screen state live in useState — whether a call is in
+  // flight, whether the send sheet is open, and the last supply figures read
+  // from the server.
+  //
+  // `coinSupply` is null until the server answers, and null renders as ∆.
+  // A zero would read as "no coin exists", which is a real and different state
+  // from "we could not ask".
+  const [showSendCoin, setShowSendCoin] = useState14(false);
+  const requestCloseSendCoin = useBackClose(showSendCoin, () => setShowSendCoin(false));
+  const [coinBusy, setCoinBusy] = useState14(false);
+  const [coinSupply, setCoinSupply] = useState14(null);
+  const coinBalance = useCoinBalance();
+  const coinHistory = useCoinHistory(8);
+  const { mintCoin, redeemCoin, sendCoin, refreshCoin } = useCoinActions();
   const [showGloobalBankStats, setShowGloobalBankStats] = useState14(false);
   const requestCloseGloobalBankStats = useBackClose(showGloobalBankStats, () => setShowGloobalBankStats(false));
   const [showGloobalCoinStats, setShowGloobalCoinStats] = useState14(false);
@@ -881,6 +897,68 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     } finally {
       setInterestBusy(null);
     }
+  };
+  // Gloobal Coin handlers.
+  //
+  // Every one goes through useCoinActions, which calls the server first and
+  // posts to the local ledger only once the server has confirmed. None of them
+  // writes a balance into component state: the ledger is where the number
+  // lives and useCoinBalance reads it back out, so the figure on screen is
+  // always the one the entries add up to.
+  const refreshCoinPosition = async () => {
+    if (currentSymbolId) {
+      try {
+        await refreshCoin(currentSymbolId);
+      } catch (err) {
+        // A read. The screen already shows the last reconciled figure, which
+        // beats blanking it because one request failed.
+      }
+    }
+    // Supply is a separate public route and reports its own failure as null,
+    // which the screen renders as ∆ — never as a zero, which would say "no
+    // coin exists" instead of "we could not ask".
+    setCoinSupply(await GloobalApi.getCoinSupply());
+  };
+  const handleMintCoin = async (amount) => {
+    if (!currentSymbolId) {
+      showToast2("Finish setting up your Gloobal ID first.");
+      return false;
+    }
+    setCoinBusy(true);
+    try {
+      const result = await mintCoin(currentSymbolId, amount);
+      setCoinSupply(await GloobalApi.getCoinSupply());
+      showToast2(`Bought ${result.minted.toFixed(2)} GC`);
+      return true;
+    } catch (err) {
+      showToast2(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+      return false;
+    } finally {
+      setCoinBusy(false);
+    }
+  };
+  const handleRedeemCoin = async (amount) => {
+    if (!currentSymbolId) {
+      showToast2("Finish setting up your Gloobal ID first.");
+      return false;
+    }
+    setCoinBusy(true);
+    try {
+      const result = await redeemCoin(currentSymbolId, amount);
+      setCoinSupply(await GloobalApi.getCoinSupply());
+      showToast2(`Cashed out ${result.redeemed.toFixed(2)} GC`);
+      return true;
+    } catch (err) {
+      showToast2(gloobalApiIsUnreachable(err) ? "Couldn't reach the server. Try again." : err.message);
+      return false;
+    } finally {
+      setCoinBusy(false);
+    }
+  };
+  const handleSendCoin = async (receiverSymbolId, amount, pin) => {
+    const result = await sendCoin(currentSymbolId, receiverSymbolId, amount, pin);
+    setCoinSupply(await GloobalApi.getCoinSupply());
+    return result;
   };
   // Rows as the server holds them, keyed by product ("bank" | "coin").
   // null means "not loaded / server didn't answer", which is what makes
@@ -1900,10 +1978,10 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       // Whether Coin works is one fact, held in deriveCapabilityStates.
       // This used to assert it independently, which is how Coin ended up
       // "not live" here and fully ticked on its own screen at the same time.
-      if (label === "Gloobal Coin" && !capabilities.gcoin.live) {
-        showToast2("Gloobal Coin isn't live yet \u2014 paying via Gloobal Bank instead");
+      if (label === "Gloobal Coin" && !capabilities.gcoin.payments) {
+        showToast2("Paying with Gloobal Coin isn't wired to this flow yet \u2014 paying via Gloobal Bank instead");
       }
-      setPayTargetMethod(label === "Gloobal Coin" && !capabilities.gcoin.live ? null : label);
+      setPayTargetMethod(label === "Gloobal Coin" && !capabilities.gcoin.payments ? null : label);
       setPayTargetOptionsOpen(false);
       setPayTargetPinOpen(true);
     }}
@@ -2167,6 +2245,23 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     interested={gloobalCoinInterested}
     interestBusy={interestBusy === "coin"}
     onRegisterInterest={() => registerInterest("coin")}
+    symbolId={currentSymbolId}
+    ccy={ccy}
+    bankBalance={bankBalance}
+    coinBalance={coinBalance}
+    coinHistory={coinHistory}
+    supply={coinSupply}
+    busy={coinBusy}
+    onMint={handleMintCoin}
+    onRedeem={handleRedeemCoin}
+    onOpenSend={() => setShowSendCoin(true)}
+    onRefresh={refreshCoinPosition}
+  /></ScreenErrorBoundary>}{showSendCoin && <ScreenErrorBoundary name="Send Gloobal Coin" onClose={requestCloseSendCoin}><SendCoinScreen
+    onBack={requestCloseSendCoin}
+    coinBalance={coinBalance}
+    onResolveRecipient={(identifier) => GloobalApi.resolveUser(identifier)}
+    onSend={handleSendCoin}
+    onShowToast={showToast2}
   /></ScreenErrorBoundary>}{
     /* Real interest data, counted server-side. Both numbers used to be
        written into the JSX — `interested ? 100 : 0`% and

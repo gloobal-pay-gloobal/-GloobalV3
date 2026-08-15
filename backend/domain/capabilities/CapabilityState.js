@@ -27,10 +27,23 @@ var CAPABILITY_KEY = {
 function deriveCapabilityStates({ hasOpenedGloobalBank = false } = {}) {
   return {
     [CAPABILITY_KEY.GLOOBAL_BANK]: { locked: false, live: true, reason: null },
-    // Payments through Coin are redirected to Bank wherever they are
-    // offered, so it is not live by the app's own behaviour — this is that
-    // behaviour stated once instead of asserted separately at each site.
-    [CAPABILITY_KEY.GLOOBAL_COIN]: { locked: false, live: false, reason: null },
+    // Coin is live: it can be minted, held, sent to another Gloobal ID and
+    // redeemed, against a reserve the server keeps equal to what it has
+    // issued. It was `live: false` for as long as that was untrue.
+    //
+    // Note what this does NOT claim. Paying a merchant with coin is still not
+    // built — Scan & Pay and Pay a Business remain fiat, and both still say so
+    // when a coin payment is chosen. "Live" here means the currency works, not
+    // that every payment surface accepts it.
+    //
+    // `payments` is a third question, and it exists because `live` stopped
+    // answering it. While Coin did nothing, "is it live" and "can you pay with
+    // it" had the same answer, and the pay sheets could read either. They have
+    // different answers now: the coin works, and Scan & Pay / Pay a Business
+    // still settle in fiat through /api/transactions/send. A sheet that let
+    // "Gloobal Coin" through on `live` alone would debit rupees and label the
+    // result coin — the exact class of lie this file exists to prevent.
+    [CAPABILITY_KEY.GLOOBAL_COIN]: { locked: false, live: true, payments: false, reason: null },
     [CAPABILITY_KEY.PAYLATER]: { locked: false, live: true, reason: null },
     [CAPABILITY_KEY.MY_ASSETS]: { locked: false, live: true, reason: null },
     // First-time-user gate: Essentials stays locked until the person
@@ -76,13 +89,24 @@ var PRODUCT_SERVICES = {
     // both be true.
     { label: "Limitless", status: SERVICE_STATUS.PLANNED, note: "Transfers are still capped per payment" }
   ],
-  // Coin is not live, so none of its four can be. deriveProductServices
-  // enforces that rather than trusting this table to stay honest.
+  // Three of Coin's four became true when the coin shipped, and each points at
+  // something in the code rather than at an intention. deriveProductServices
+  // still holds the guard below, so if Coin is ever marked not-live again these
+  // revert to planned on their own.
   [CAPABILITY_KEY.GLOOBAL_COIN]: [
-    { label: "Stable", status: SERVICE_STATUS.PLANNED, note: "No peg or reserve exists yet" },
-    { label: "Instant", status: SERVICE_STATUS.PLANNED, note: "No settlement rail yet" },
-    { label: "Borderless", status: SERVICE_STATUS.PLANNED, note: "No settlement rail yet" },
-    { label: "Backed", status: SERVICE_STATUS.PLANNED, note: "No reserve is held yet" }
+    // Minted and redeemed 1:1 against the reserve currency, both directions,
+    // at the same rate — /api/coin/mint and /api/coin/redeem.
+    { label: "Stable", status: SERVICE_STATUS.LIVE, note: "Pegged 1:1 and redeemable from reserve" },
+    // A coin transfer commits inside one Mongo transaction. There is no
+    // pending state for one to sit in.
+    { label: "Instant", status: SERVICE_STATUS.LIVE, note: "Transfers settle immediately" },
+    // Still not true, and for a more specific reason than before: the reserve
+    // is denominated in a single currency, so coin cannot be minted against or
+    // redeemed into another one. Crossing a border is not what is missing.
+    { label: "Borderless", status: SERVICE_STATUS.PLANNED, note: "The reserve is single-currency for now" },
+    // The reserve holds fiat equal to every coin issued, and /api/coin/supply
+    // reports that comparison rather than asserting the result.
+    { label: "Backed", status: SERVICE_STATUS.LIVE, note: "Every coin is backed 1:1 in reserve" }
   ]
 };
 

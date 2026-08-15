@@ -287,7 +287,16 @@ test("many users (10,000): every registration is independent, M is exactly the s
     });
     expectedM += amount;
   }
-  assert.equal(registry.all().length, N * 5 + 1, "5 accounts per user (bank, essentials, referralEarnings, paylaterPayable, creatorShareIncome) plus the reserve");
+  // 6 per user and 3 platform-wide. The coin account joined the per-user
+  // bundle when Gloobal Coin was added, and the platform gained the two halves
+  // of its backing (coin reserve, coin issuance) alongside the original
+  // clearing reserve. Counted explicitly rather than as a bare number so the
+  // next account to appear fails here loudly instead of drifting.
+  assert.equal(
+    registry.all().length,
+    N * 6 + 3,
+    "6 accounts per user (bank, coin, essentials, referralEarnings, paylaterPayable, creatorShareIncome) plus reserve, coin reserve and coin issuance"
+  );
   let totalBank = 0;
   for (const account of registry.all()) {
     if (account.type === ACCOUNT_TYPE.ASSET && account.id.endsWith(":bank")) {
