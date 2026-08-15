@@ -1,0 +1,103 @@
+// src/screens/Banks/GloobalBankScreen.jsx
+import { ArrowDownLeft as BankArrowDownLeft, ArrowUpRight as BankArrowUpRight } from "lucide-react";
+
+// Gloobal Bank — the account this app actually runs on, and the screen
+// people land on from the Accounts tab.
+//
+// Lifted out of DashboardScreen, where it was one of three ~90-line
+// conditional blocks written inline. Nothing about what it draws changed
+// in the move; what it gained is the two things it was missing, and the
+// reason they were missing is that a screen buried inside another screen's
+// return statement is a bad place to add anything:
+//
+//   - the balance, which this screen is nominally about and never showed
+//   - the last five transactions on that balance
+//
+// Both are handed in as props rather than fetched here. `balance` is the
+// same reconciled figure the wallet card shows (App.jsx reconciles it
+// against GET /api/profile/:symbolId on sign-in and after every payment),
+// so reading the profile route a second time here would risk showing a
+// different number for the same account on two screens of the same app.
+// One read, one number.
+function GloobalBankScreen({
+  onBack,
+  onOpenStats,
+  heroColor,
+  services,
+  interested,
+  interestBusy,
+  onRegisterInterest,
+  ccy,
+  balance,
+  balanceVisible,
+  onToggleBalance,
+  recentTransactions
+}) {
+  const rows = Array.isArray(recentTransactions) ? recentTransactions : [];
+  return <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><ProductScreenHeader
+    title={<OneBankMark />}
+    onBack={onBack}
+    onAction={onOpenStats}
+    actionLabel="Interest stats"
+  /><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 20 }}><ProductScreenHero color={heroColor} />{
+    /* The balance sits behind the same biometric gate as the wallet
+       card on Home — same `balanceVisible` state, same eye control,
+       same WebAuthn check on the way to revealing it. Showing it
+       unmasked here would have made the gate on the other screen
+       decorative: one tap to a second screen and the number is
+       there anyway. */
+  }<div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      padding: "18px 20px",
+      borderRadius: T.radiusLg,
+      background: T.surface,
+      border: `1px solid ${T.line}`,
+      boxShadow: T.shadowCard
+    }}
+  ><span style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}><span style={{ fontSize: 11, fontWeight: 800, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.6 }}>Your balance</span><span style={{ fontSize: 28, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, letterSpacing: 0.2 }}>{balanceVisible ? `${ccy}${balance}` : "•••••••"}</span></span><button
+    onClick={onToggleBalance}
+    aria-label={balanceVisible ? "Hide balance" : "Show balance"}
+    className="v2-tap"
+    style={{ width: 38, height: 38, borderRadius: "50%", border: "none", flexShrink: 0, background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+  ><EyeIcon open={balanceVisible} /></button></div><GloobalTaglineCard accentColor={heroColor} /><GloobalIamInButton
+    interested={interested}
+    busy={interestBusy}
+    onClick={onRegisterInterest}
+  /><ProductServicesCard services={services} />{
+    /* Recent transactions — the same five rows the Home tab's activity
+       list draws, merged across both directions rather than split by a
+       tab, because this screen is about the account rather than about
+       sending or receiving. Empty is stated as empty; a balance screen
+       with nothing under it should say so instead of rendering a blank
+       card that reads as a failed load. */
+  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px" }}><span
+    style={{
+      position: "absolute",
+      top: 0,
+      left: 16,
+      transform: "translateY(-50%)",
+      background: T.surface,
+      padding: "0 6px",
+      borderRadius: 999,
+      fontSize: 10.5,
+      fontWeight: 800,
+      color: T.inkFaint,
+      textTransform: "uppercase",
+      letterSpacing: 0.4
+    }}
+  >Recent Transactions</span>{rows.length === 0 ? <div style={{ padding: "18px 0 8px", textAlign: "center", fontSize: 12, color: T.inkFaint, lineHeight: 1.5 }}>
+        No transactions yet — send your first payment
+      </div> : rows.map((t, i) => {
+    const received = t.direction === "received";
+    return <div
+      key={t.key}
+      style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 8 : 0 }}
+    ><span
+      style={{ width: 30, height: 30, borderRadius: "50%", flexShrink: 0, background: received ? T.positiveSoft : T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}
+    >{received ? <BankArrowDownLeft size={14} color={T.positive} /> : <BankArrowUpRight size={14} color={T.accent} />}</span><span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 13, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span><span style={{ display: "block", fontSize: 10.5, color: T.inkFaint, marginTop: 1 }}>{t.date}</span></span><span style={{ fontSize: 13, fontWeight: 800, color: received ? T.positive : T.ink, flexShrink: 0 }}>{received ? "+" : "−"}{ccy}{Number(t.amount || 0).toFixed(2)}</span></div>;
+  })}</div></div></div>;
+}

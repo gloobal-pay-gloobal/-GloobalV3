@@ -149,6 +149,14 @@ const FRONTEND_MODULES = [
   "features/paylater/PayLaterLedger.jsx",
   "features/paylater/PayLaterScreen.jsx",
   "screens/Banks/AddBankScreen.jsx",
+  // The Gloobal Bank / Gloobal Coin / About Us screens, and the pieces
+  // the first two share. All three used to be conditional blocks inside
+  // DashboardScreen's return; they are still opened from there, so they
+  // are emitted ahead of it.
+  "components/cards/GloobalTaglineCard.jsx",
+  "screens/Banks/GloobalBankScreen.jsx",
+  "screens/Coin/GloobalCoinScreen.jsx",
+  "screens/About/AboutUsScreen.jsx",
   "screens/Dashboard/Dashboard.jsx",
   "screens/SendMoney/SendMoney.jsx",
   "screens/Coverage/GloobalCoverageScreen.jsx",

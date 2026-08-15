@@ -882,19 +882,6 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       setInterestBusy(null);
     }
   };
-  // "Our Services" rows for the Bank and Coin screens. The labels, their
-  // status and the reason each one carries all come from
-  // deriveProductServices (see CapabilityState.js); the icon is the only
-  // thing that belongs to the view, so it is the only thing mapped here.
-  const SERVICE_ICONS = {
-    Cashless: CreditCard3,
-    Borderless: Globe22,
-    Taxless: Shield3,
-    Limitless: TrendingUp2,
-    Stable: Shield3,
-    Instant: Zap3,
-    Backed: Landmark5
-  };
   // Rows as the server holds them, keyed by product ("bank" | "coin").
   // null means "not loaded / server didn't answer", which is what makes
   // the bundled table a fallback rather than dead code.
@@ -921,16 +908,6 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     if (fromServer) return fromServer.services;
     return deriveProductServices(capabilityKey, capabilities);
   };
-  // One renderer for both screens, so Bank and Coin cannot drift into
-  // showing the same status two different ways.
-  const renderServiceRows = (capabilityKey) => serviceRowsFor(capabilityKey).map((item, i) => {
-    const Icon = SERVICE_ICONS[item.label] || Shield3;
-    const live = item.status === "live";
-    return <div
-      key={item.label}
-      style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-    ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: live ? T.accentSoft : T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon size={17} color={live ? T.accent : T.inkFaint} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: live ? T.ink : T.inkSoft }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span>{live ? <Check2 size={17} color={T.positive} style={{ flexShrink: 0 }} /> : <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.inkFaint, background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 999, padding: "4px 9px" }}>Planned</span>}</div>;
-  });
   const totalReferralEarned = referralNetwork.reduce((sum, m) => sum + m.earned, 0);
   const [showSettleReferralBiometric, setShowSettleReferralBiometric] = useState14(false);
   const [settleReferralBiometricScanning, setSettleReferralBiometricScanning] = useState14(false);
@@ -955,6 +932,28 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   // so shareableGloobalId can already be role-aware.)
   const roleSendHistory = useMemo5(() => sendHistory.filter((t) => (t.role || "user") === shareRole), [sendHistory, shareRole]);
   const dailySpending = useMemo5(() => generateDailySpending(roleSendHistory, receivedRows), [roleSendHistory, receivedRows]);
+  // The five most recent transactions on the Gloobal Bank account, both
+  // directions in one list. Home's activity card splits them by a
+  // sent/received tab because that is a question about a direction; the
+  // Bank screen is a question about an account, so its list is the
+  // account's, merged and ordered by when things happened.
+  //
+  // Rows carry a display date ("Aug 13") rather than a timestamp, so the
+  // ordering goes through parseDemoDate — the same reader the history
+  // filters and the spending chart already use. A row whose date won't
+  // parse sorts last instead of throwing the whole list out of order.
+  //
+  // Placed here rather than beside the Bank screen's other state because
+  // it reads roleSendHistory, which is declared immediately above.
+  const recentBankTransactions = useMemo5(() => {
+    const stamp = (row) => {
+      const parsed = parseDemoDate(row.date);
+      return isNaN(parsed.getTime()) ? -Infinity : parsed.getTime();
+    };
+    const sent = roleSendHistory.map((t, i) => ({ ...t, direction: "sent", key: t.txnId || `sent-${t.name}-${t.date}-${i}` }));
+    const received = receivedRows.map((t, i) => ({ ...t, direction: "received", key: t.txnId || `recv-${t.name}-${t.date}-${i}` }));
+    return sent.concat(received).sort((a, b) => stamp(b) - stamp(a)).slice(0, 5);
+  }, [roleSendHistory, receivedRows]);
   useEffect12(() => {
     if (onShareRoleChange) onShareRoleChange(shareRole);
   }, [shareRole]);
@@ -2141,212 +2140,34 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        Accounts. "Interested" just flips a local flag and shows a
        toast, standing in for what would be a real signup/waitlist
        call that gives the business a signal of demand. */
-  }{showGloobalBankInfo && <ScreenErrorBoundary name="Gloobal Bank" onClose={requestCloseGloobalBankInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
-    onClick={requestCloseGloobalBankInfo}
-    aria-label="Back"
-    className="v2-tap"
-    style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, flex: 1 }}><OneBankMark /></span>{
-    /* Real, not fake — this prototype only has one real active
-       account (this one), so "how many have shown interest" is
-       genuinely 1 of 1 or 0 of 1, nothing invented. Once a real
-       backend exists, this same icon just starts opening real
-       active-user and interest data. */
-  }<button
-    onClick={() => {
+  }{showGloobalBankInfo && <ScreenErrorBoundary name="Gloobal Bank" onClose={requestCloseGloobalBankInfo}><GloobalBankScreen
+    onBack={requestCloseGloobalBankInfo}
+    onOpenStats={() => {
       loadInterestCount("bank");
       setShowGloobalBankStats(true);
     }}
-    aria-label="Interest stats"
-    className="v2-tap"
-    style={{
-      width: 40,
-      height: 40,
-      borderRadius: "50%",
-      border: "none",
-      background: T.surface,
-      boxShadow: T.shadowCard,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      cursor: "pointer"
-    }}
-  ><Users23 size={17} color={T.accent} /></button></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 20 }}>{
-    /* Same "white logo on a randomly colored circle" pattern
-       used behind the dial pad and GH Score's corner circle —
-       the color changes every few seconds while this screen is
-       open. The logo itself never moves or flips, only the
-       color underneath it does. */
-  }<div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}><div
-    style={{
-      width: 168,
-      height: 168,
-      borderRadius: "50%",
-      background: bankHeroColor,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: `0 10px 28px ${bankHeroColor}40`,
-      transition: "background 0.4s ease, box-shadow 0.4s ease"
-    }}
-  ><img src={G_LOGO_DATA_URI} alt="" style={{ width: 138, height: 138, objectFit: "contain", filter: "brightness(0) invert(1)" }} /></div></div>{
-    /* % + HOOMAN TO HOOMAN in one box — corner badge matches the
-       Accounts page's, interest count sits on the right edge.
-       "I am IN" is its own button below, not merged into it. */
-  }<div
-    style={{
-      position: "relative",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 6,
-      padding: "22px 18px",
-      borderRadius: T.radiusLg,
-      background: T.surface,
-      border: `1px solid ${T.line}`,
-      boxShadow: T.shadowCard,
-      textAlign: "center"
-    }}
-  ><span style={{ position: "absolute", top: 10, right: 10, zIndex: 1 }}><GH2HFlipCircle size={22} /></span><span style={{ marginBottom: 4 }}><ZeroPercentMark size={38} color={bankHeroColor} /></span><span style={{ fontSize: 14.5, color: T.ink }}><HoomanMark /></span></div><button
-    onClick={() => registerInterest("bank")}
-    disabled={gloobalBankInterested || interestBusy === "bank"}
-    className="v2-tap"
-    style={{
-      width: "100%",
-      border: "none",
-      borderRadius: T.radiusMd,
-      padding: "16px 0",
-      cursor: gloobalBankInterested ? "default" : "pointer",
-      background: gloobalBankInterested ? T.positiveSoft : T.gradButton,
-      color: gloobalBankInterested ? T.positive : "#fff",
-      fontSize: 14,
-      fontWeight: 800,
-      boxShadow: gloobalBankInterested ? "none" : "0 10px 24px rgba(124,58,237,0.3)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 8
-    }}
-  >{gloobalBankInterested ? <><Check2 size={16} /> You're on the list
-                </> : interestBusy === "bank" ? "Adding you…" : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
-    style={{
-      position: "absolute",
-      top: 0,
-      left: 16,
-      transform: "translateY(-50%)",
-      background: T.surface,
-      padding: "0 6px",
-      borderRadius: 999,
-      fontSize: 10.5,
-      fontWeight: 800,
-      color: T.inkFaint,
-      textTransform: "uppercase",
-      letterSpacing: 0.4
-    }}
-  >
-                Our Services
-              </span>{renderServiceRows(CAPABILITY_KEY.GLOOBAL_BANK)}</div></div></div></ScreenErrorBoundary>}{showGloobalCoinInfo && <ScreenErrorBoundary name="Gloobal Coin" onClose={requestCloseGloobalCoinInfo}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
-    onClick={requestCloseGloobalCoinInfo}
-    aria-label="Back"
-    className="v2-tap"
-    style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, flex: 1 }}><SingleOMark before="" after="NE CURRENCY" /></span>{
-    /* Same real (not fake) indicator as Gloobal Bank's — one
-       real active account, genuinely 100% or 0% interested. */
-  }<button
-    onClick={() => {
+    heroColor={bankHeroColor}
+    services={serviceRowsFor(CAPABILITY_KEY.GLOOBAL_BANK)}
+    interested={gloobalBankInterested}
+    interestBusy={interestBusy === "bank"}
+    onRegisterInterest={() => registerInterest("bank")}
+    ccy={ccy}
+    balance={balance}
+    balanceVisible={balanceVisible}
+    onToggleBalance={handleToggleBalance}
+    recentTransactions={recentBankTransactions}
+  /></ScreenErrorBoundary>}{showGloobalCoinInfo && <ScreenErrorBoundary name="Gloobal Coin" onClose={requestCloseGloobalCoinInfo}><GloobalCoinScreen
+    onBack={requestCloseGloobalCoinInfo}
+    onOpenStats={() => {
       loadInterestCount("coin");
       setShowGloobalCoinStats(true);
     }}
-    aria-label="Interest stats"
-    className="v2-tap"
-    style={{
-      width: 40,
-      height: 40,
-      borderRadius: "50%",
-      border: "none",
-      background: T.surface,
-      boxShadow: T.shadowCard,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      cursor: "pointer"
-    }}
-  ><Users23 size={17} color={T.accent} /></button></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 20 }}>{
-    /* Same "white logo on a randomly colored circle" pattern
-       used behind the dial pad and GH Score's corner circle —
-       the color changes every few seconds while this screen is
-       open. The logo itself never moves or flips, only the
-       color underneath it does. */
-  }<div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}><div
-    style={{
-      width: 168,
-      height: 168,
-      borderRadius: "50%",
-      background: coinHeroColor,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: `0 10px 28px ${coinHeroColor}40`,
-      transition: "background 0.4s ease, box-shadow 0.4s ease"
-    }}
-  ><img src={G_LOGO_DATA_URI} alt="" style={{ width: 138, height: 138, objectFit: "contain", filter: "brightness(0) invert(1)" }} /></div></div>{
-    /* % + HOOMAN TO HOOMAN in one box — corner badge matches the
-       Accounts page's, interest count sits on the right edge.
-       "I am IN" is its own button below, not merged into it. */
-  }<div
-    style={{
-      position: "relative",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: 6,
-      padding: "22px 18px",
-      borderRadius: T.radiusLg,
-      background: T.surface,
-      border: `1px solid ${T.line}`,
-      boxShadow: T.shadowCard,
-      textAlign: "center"
-    }}
-  ><span style={{ position: "absolute", top: 10, right: 10, zIndex: 1 }}><GH2HFlipCircle size={22} /></span><span style={{ marginBottom: 4 }}><ZeroPercentMark size={38} color={coinHeroColor} /></span><span style={{ fontSize: 14.5, color: T.ink }}><HoomanMark /></span></div><button
-    onClick={() => registerInterest("coin")}
-    disabled={gloobalCoinInterested || interestBusy === "coin"}
-    className="v2-tap"
-    style={{
-      width: "100%",
-      border: "none",
-      borderRadius: T.radiusMd,
-      padding: "16px 0",
-      cursor: gloobalCoinInterested ? "default" : "pointer",
-      background: gloobalCoinInterested ? T.positiveSoft : T.gradButton,
-      color: gloobalCoinInterested ? T.positive : "#fff",
-      fontSize: 14,
-      fontWeight: 800,
-      boxShadow: gloobalCoinInterested ? "none" : "0 10px 24px rgba(124,58,237,0.3)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 8
-    }}
-  >{gloobalCoinInterested ? <><Check2 size={16} /> You're on the list
-                </> : interestBusy === "coin" ? "Adding you…" : "I am IN"}</button><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
-    style={{
-      position: "absolute",
-      top: 0,
-      left: 16,
-      transform: "translateY(-50%)",
-      background: T.surface,
-      padding: "0 6px",
-      borderRadius: 999,
-      fontSize: 10.5,
-      fontWeight: 800,
-      color: T.inkFaint,
-      textTransform: "uppercase",
-      letterSpacing: 0.4
-    }}
-  >
-                Our Services
-              </span>{renderServiceRows(CAPABILITY_KEY.GLOOBAL_COIN)}</div></div></div></ScreenErrorBoundary>}{
+    heroColor={coinHeroColor}
+    services={serviceRowsFor(CAPABILITY_KEY.GLOOBAL_COIN)}
+    interested={gloobalCoinInterested}
+    interestBusy={interestBusy === "coin"}
+    onRegisterInterest={() => registerInterest("coin")}
+  /></ScreenErrorBoundary>}{
     /* Real interest data, counted server-side. Both numbers used to be
        written into the JSX — `interested ? 100 : 0`% and
        `interested ? 1 : 0` of a hardcoded "1 active user" — so this
@@ -2376,58 +2197,11 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        mission line, a real feature list (not fabricated
        numbers), then the same Version/Terms/Privacy rows and
        support email already used on the profile About screen. */
-  }{showAboutUs && <ScreenErrorBoundary name="About Us" onClose={requestCloseAboutUs}><div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}><button
-    onClick={requestCloseAboutUs}
-    aria-label="Back"
-    className="v2-tap"
-    style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-  ><ArrowLeft4 size={18} color={T.ink} /></button><span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, flex: 1 }}>About Us</span></div><div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 20 }}><div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}><div
-    style={{
-      width: 168,
-      height: 168,
-      borderRadius: "50%",
-      background: aboutHeroColor,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: `0 10px 28px ${aboutHeroColor}40`,
-      transition: "background 0.4s ease, box-shadow 0.4s ease"
-    }}
-  ><img src={G_LOGO_DATA_URI} alt="" style={{ width: 138, height: 138, objectFit: "contain", filter: "brightness(0) invert(1)" }} /></div></div><div style={{ textAlign: "center" }}><span style={{ fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}><GloobalWordmark suffix=" ID" /></span><div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, marginTop: 6 }}>
-                Cashless · Taxless · Borderless · Limitless
-              </div></div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "18px" }}><div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Our Mission</div><div style={{ fontSize: 12.5, color: T.inkFaint, marginTop: 6, lineHeight: 1.5 }}>
-                We're building one Gloobal ID that moves money the way people actually move — across countries, currencies, and platforms — without the fees, forms, or borders getting in the way.
-              </div></div><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 4 }}><span
-    style={{
-      position: "absolute",
-      top: 0,
-      left: 16,
-      transform: "translateY(-50%)",
-      background: T.surface,
-      padding: "0 6px",
-      borderRadius: 999,
-      fontSize: 10.5,
-      fontWeight: 800,
-      color: T.inkFaint,
-      textTransform: "uppercase",
-      letterSpacing: 0.4
-    }}
-  >
-                What We Offer
-              </span>{[
-    { label: "Instant transfers", icon: Zap3 },
-    { label: "Borderless by design", icon: Globe22 },
-    { label: "Bank-grade security", icon: Shield3 },
-    { label: "Community first", icon: Users23 }
-  ].map((item, i) => <div
-    key={item.label}
-    style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span></div>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span></div>{["Terms of Service", "Privacy Policy"].map((label) => <button
-    key={label}
-    onClick={() => showToast2(`${label} coming soon`)}
-    className="v2-row"
-    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
-  ><span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{label}</span><ChevronRightIcon /></button>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}><div style={{ fontSize: 12, color: T.inkFaint }}>Get in touch</div><div style={{ fontSize: 13.5, fontWeight: 700, color: T.accent, marginTop: 2 }}>support@gloobal.id</div></div></div></div></ScreenErrorBoundary>}{showAssets && <AssetsScreen
+  }{showAboutUs && <ScreenErrorBoundary name="About Us" onClose={requestCloseAboutUs}><AboutUsScreen
+    onBack={requestCloseAboutUs}
+    heroColor={aboutHeroColor}
+    onShowToast={showToast2}
+  /></ScreenErrorBoundary>}{showAssets && <AssetsScreen
     onClose={requestCloseAssets}
     ccy={ccy}
     assetRows={assetRows}
