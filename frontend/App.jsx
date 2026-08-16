@@ -617,10 +617,6 @@ function GloobalId() {
   // it is not a transient failure to retry — it is a dead end for
   // registration, and the card renders it with a "Log in instead" action.
   const [phoneAlreadyRegistered, setPhoneAlreadyRegistered] = useState19(false);
-  // Alternatives offered when the Gloobal ID someone picked is taken.
-  // Generated from the same genSuggestedId the Suggested-for-you row uses,
-  // so a tapped suggestion is always a well-formed 12-symbol ID.
-  const [takenIdSuggestions, setTakenIdSuggestions] = useState19([]);
   // Login only: set once GET /api/users/resolve has confirmed the entered
   // Gloobal ID belongs to somebody. Drives the "Account found" chip and is
   // the gate on advancing to the PIN step.
@@ -922,13 +918,14 @@ function GloobalId() {
     try {
       const { available } = await GloobalApi.checkSymbolAvailability(secureId);
       if (available === false) {
+        // No second set of alternatives here — the Suggested-for-you row
+        // above the dial already offers one, and its own refresh control
+        // generates another. Showing a second, different pair on top of
+        // that was redundant and made "taken" look like a bigger dead end
+        // than it is.
         setAuthError("That Gloobal ID is already taken. Try another.");
-        // Two ready-made alternatives, so "taken" comes with a way out
-        // instead of sending the person back to the dial to guess again.
-        setTakenIdSuggestions([genSuggestedId(SECURE_ID_LENGTH), genSuggestedId(SECURE_ID_LENGTH)]);
         return;
       }
-      setTakenIdSuggestions([]);
       flipTo("referral");
     } finally {
       setAuthBusy(false);
@@ -1381,7 +1378,6 @@ function GloobalId() {
     // out account's passkey.
     gloobalSetBiometricSymbolId(null);
     setPhoneAlreadyRegistered(false);
-    setTakenIdSuggestions([]);
     setLoginIdResolved(false);
     setLoginIdentifier("");
     setBiometricNotice(null);
@@ -1913,35 +1909,6 @@ function GloobalId() {
        logging in, since login needs the person's existing ID,
        not a fresh suggestion. */
   }{stage === "secureId" && !isLoginAttempt && <SuggestedIdRow id={suggestedRegId} onPick={setSecureId} />}{
-    /* Taken ID — two concrete alternatives, so the answer to "that one
-       is gone" is a tap rather than another twelve turns of the dial.
-       Picking one clears the verdict it was offered for. */
-  }{stage === "secureId" && !isLoginAttempt && takenIdSuggestions.length > 0 && <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}><span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: T.inkFaint, textAlign: "center" }}>
-                  Try one of these instead
-                </span>{takenIdSuggestions.map((suggestion) => <button
-    key={suggestion}
-    onClick={() => {
-      setSecureId(suggestion);
-      setTakenIdSuggestions([]);
-      setAuthError(null);
-    }}
-    aria-label={`Use the Gloobal ID ${suggestion}`}
-    className="v2-tap"
-    style={{
-      width: "100%",
-      maxWidth: "100%",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "11px 12px",
-      borderRadius: T.radiusMd,
-      border: `1px solid ${T.line}`,
-      background: T.surface,
-      boxShadow: T.shadowCard,
-      cursor: "pointer",
-      overflow: "hidden"
-    }}
-  ><ColoredGloobalId id={suggestion} /></button>)}</div>}{
     /* Login only: proof the ID resolves to a real account, shown before
        the PIN screen rather than after a sign-in that would have failed
        for a reason the person could not see. */

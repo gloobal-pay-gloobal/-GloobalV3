@@ -1,0 +1,617 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="2260" viewBox="0 0 1700 2260" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title>Gloobal — Backend Architecture (as built)</title>
+  <desc>End-to-end architecture of the Gloobal platform: existing React PWA on Netlify, Express 5 API on Render, MongoDB Atlas. Verified against Backend/server.js, Backend/models, and the frontend source.</desc>
+
+  <defs>
+    <style>
+      .h1   { font-size: 30px; font-weight: 800; fill: #14182B; }
+      .sub  { font-size: 13.5px; fill: #5B6478; }
+      .lay  { font-size: 15px; font-weight: 800; fill: #FFFFFF; letter-spacing: .6px; }
+      .laynum { font-size: 12px; font-weight: 800; fill: #FFFFFF; opacity: .75; }
+      .bt   { font-size: 14px; font-weight: 750; fill: #14182B; }
+      .bs   { font-size: 11.5px; fill: #5B6478; }
+      .bm   { font-size: 11px; fill: #5B6478; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+      .arr  { font-size: 11px; fill: #6D28D9; font-weight: 650; }
+      .arrb { font-size: 11px; fill: #7A8496; }
+      .chip { font-size: 11px; fill: #14182B; font-weight: 650; }
+      .chips{ font-size: 9.5px; fill: #8A93A6; }
+      .note { font-size: 11.5px; fill: #5B6478; }
+      .warn { font-size: 11.5px; fill: #92400E; }
+      .neg  { font-size: 11.5px; fill: #7F1D1D; }
+      .lbl  { font-size: 10.5px; font-weight: 800; letter-spacing: .8px; }
+    </style>
+
+    <marker id="aReq" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#7C3AED"/>
+    </marker>
+    <marker id="aRes" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#9AA3B2"/>
+    </marker>
+    <marker id="aExt" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2563EB"/>
+    </marker>
+    <marker id="aOps" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#D97706"/>
+    </marker>
+  </defs>
+
+  <rect width="1700" height="2260" fill="#F7F8FB"/>
+
+  <!-- ══ TITLE ══ -->
+  <text class="h1" x="40" y="58">Gloobal — Backend Architecture</text>
+  <text class="sub" x="40" y="84">As built and deployed, not proposed. Every box below was verified against Backend/server.js, Backend/models/, and the frontend source.</text>
+  <text class="sub" x="40" y="104">gloobalv3.netlify.app  →  gloobal-pay.onrender.com  →  MongoDB Atlas (replica set)</text>
+
+  <!-- ══════════ LAYER 1 — FRONTEND ══════════ -->
+  <rect x="40" y="126" width="1120" height="232" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="126" width="1120" height="34" rx="14" fill="#4C1D95"/>
+  <rect x="40" y="146" width="1120" height="14" fill="#4C1D95"/>
+  <text class="laynum" x="56" y="148">01</text>
+  <text class="lay" x="82" y="148">EXISTING FRONTEND — unchanged by this architecture</text>
+  <text class="bs" x="880" y="148" fill="#DDD6FE">React 18 · Vite · PWA · Netlify</text>
+
+  <rect x="60" y="176" width="254" height="164" rx="10" fill="#FAF9FF" stroke="#E5E0F5"/>
+  <text class="bt" x="76" y="200">React SPA (single bundle)</text>
+  <text class="bs" x="76" y="221">Modules share one global scope;</text>
+  <text class="bs" x="76" y="238">build_app.mjs concatenates in a</text>
+  <text class="bs" x="76" y="255">fixed order.</text>
+  <text class="bm" x="76" y="279">frontend/ + backend/</text>
+  <text class="bm" x="76" y="296">→ GloobalApp.jsx</text>
+  <text class="bs" x="76" y="320">Screens: Dashboard, Send, Scan,</text>
+  <text class="bs" x="76" y="334">Bank, Coin, Coverage, About.</text>
+
+  <rect x="330" y="176" width="254" height="164" rx="10" fill="#FAF9FF" stroke="#E5E0F5"/>
+  <text class="bt" x="346" y="200">In-browser domain layer</text>
+  <text class="bs" x="346" y="221">Double-entry ledger held client</text>
+  <text class="bs" x="346" y="238">side, mirroring the server.</text>
+  <text class="bm" x="346" y="262">FinancialCore</text>
+  <text class="bm" x="346" y="279">├ LedgerEngine · Money</text>
+  <text class="bm" x="346" y="296">├ CoinService (GC)</text>
+  <text class="bm" x="346" y="313">├ PayLater · Essentials</text>
+  <text class="bm" x="346" y="330">└ Risk · Settlement</text>
+
+  <rect x="600" y="176" width="254" height="164" rx="10" fill="#FAF9FF" stroke="#E5E0F5"/>
+  <text class="bt" x="616" y="200">API client</text>
+  <text class="bm" x="616" y="223">services/api/</text>
+  <text class="bs" x="616" y="245">httpClient — 45 s timeout for</text>
+  <text class="bs" x="616" y="262">Render cold starts</text>
+  <text class="bs" x="616" y="283">rateLimiter — client-side guard</text>
+  <text class="bs" x="616" y="304">sessionStore — bearer token in</text>
+  <text class="bs" x="616" y="321">localStorage, sent on every</text>
+  <text class="bs" x="616" y="338">authenticated call</text>
+
+  <rect x="870" y="176" width="254" height="164" rx="10" fill="#FAF9FF" stroke="#E5E0F5"/>
+  <text class="bt" x="886" y="200">Service worker (PWA)</text>
+  <text class="bs" x="886" y="221">Workbox, registerType</text>
+  <text class="bm" x="886" y="238">autoUpdate</text>
+  <text class="bs" x="886" y="260">Precaches the app shell, so the</text>
+  <text class="bs" x="886" y="277">first visit after a deploy still</text>
+  <text class="bs" x="886" y="294">renders the previous bundle and</text>
+  <text class="bs" x="886" y="311">self-corrects on the next one.</text>
+  <text class="bs" x="886" y="334" fill="#92400E">Operational quirk, not a bug.</text>
+
+  <!-- ══ Frontend → External CDN ══ -->
+  <line x1="1160" y1="240" x2="1186" y2="240" stroke="#2563EB" stroke-width="2" marker-end="url(#aExt)"/>
+
+  <!-- ══ gap 1 ══ -->
+  <line x1="575" y1="360" x2="575" y2="398" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <line x1="635" y1="398" x2="635" y2="360" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="arr" x="655" y="376">HTTPS · REST / JSON · Authorization: Bearer &lt;token&gt;</text>
+  <text class="arrb" x="655" y="392">Only transport into the backend. No WebSocket, no GraphQL.</text>
+  <text class="arrb" x="555" y="384" text-anchor="end">JSON · 2xx / 4xx</text>
+
+  <!-- ══════════ LAYER 2 — API / ENTRY ══════════ -->
+  <rect x="40" y="400" width="1120" height="152" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="400" width="1120" height="34" rx="14" fill="#5B21B6"/>
+  <rect x="40" y="420" width="1120" height="14" fill="#5B21B6"/>
+  <text class="laynum" x="56" y="422">02</text>
+  <text class="lay" x="82" y="422">API / ENTRY LAYER</text>
+  <text class="bs" x="890" y="422" fill="#DDD6FE">Express 5 · Node 20 · Render</text>
+
+  <rect x="60" y="450" width="350" height="86" rx="10" fill="#F8F6FE" stroke="#E5E0F5"/>
+  <text class="bt" x="76" y="473">CORS allowlist</text>
+  <text class="bs" x="76" y="493">Named origins only — was cors() with</text>
+  <text class="bs" x="76" y="510">no argument, i.e. Allow-Origin: *.</text>
+  <text class="bs" x="76" y="527">No-Origin callers (curl, health) pass.</text>
+
+  <rect x="425" y="450" width="350" height="86" rx="10" fill="#F8F6FE" stroke="#E5E0F5"/>
+  <text class="bt" x="441" y="473">Body cap</text>
+  <text class="bm" x="441" y="494">express.json({ limit: '64kb' })</text>
+  <text class="bs" x="441" y="514">Bounds what one request can make</text>
+  <text class="bs" x="441" y="531">the process allocate.</text>
+
+  <rect x="790" y="450" width="350" height="86" rx="10" fill="#F8F6FE" stroke="#E5E0F5"/>
+  <text class="bt" x="806" y="473">Rate limiting — in-process</text>
+  <text class="bs" x="806" y="493">Five buckets: otp 12 · credential 30 ·</text>
+  <text class="bs" x="806" y="510">register 8 · lookup 90 · write 150 / 5 min.</text>
+  <text class="warn" x="806" y="529">In-memory Map — single instance only.</text>
+
+  <!-- ══ gap 2 ══ -->
+  <line x1="575" y1="554" x2="575" y2="592" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <line x1="635" y1="592" x2="635" y2="554" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="arr" x="655" y="572">Request survives CORS, size and rate checks</text>
+  <text class="arrb" x="655" y="588">Refused here never reaches auth.</text>
+  <text class="arrb" x="555" y="578" text-anchor="end">429 · Retry-After</text>
+
+  <!-- ══════════ LAYER 3 — AUTH ══════════ -->
+  <rect x="40" y="594" width="1120" height="254" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="594" width="1120" height="34" rx="14" fill="#B45309"/>
+  <rect x="40" y="614" width="1120" height="14" fill="#B45309"/>
+  <text class="laynum" x="56" y="616">03</text>
+  <text class="lay" x="82" y="616">AUTHENTICATION &amp; AUTHORIZATION</text>
+  <text class="bs" x="838" y="616" fill="#FDE68A">HMAC-SHA256 bearer token · not a JWT library</text>
+
+  <rect x="60" y="644" width="545" height="80" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="76" y="667">requireAuth — who is calling</text>
+  <text class="bm" x="76" y="688">base64url(claims) + '.' + hmacSHA256(payload, AUTH_TOKEN_SECRET)</text>
+  <text class="bs" x="76" y="708">Claims: sub (user _id), symbolId, iat, exp. Signature compared with</text>
+  <text class="bs" x="76" y="720" >timingSafeEqual, length-checked first. Expired or unsigned → 401.</text>
+
+  <rect x="615" y="644" width="525" height="80" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="631" y="667">requireSelf — is it their own data</text>
+  <text class="bs" x="631" y="688">Reads the Gloobal ID from path, then body, then query, and compares</text>
+  <text class="bs" x="631" y="705">by document _id — never by symbolId string, so a rename mid-session</text>
+  <text class="bs" x="631" y="722">cannot lock someone out of their own account. Mismatch → 403.</text>
+
+  <text class="lbl" x="60" y="748" fill="#8A93A6">CREDENTIAL STORES — what proves identity in the first place</text>
+
+  <rect x="60" y="756" width="254" height="78" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="76" y="778">PIN</text>
+  <text class="bs" x="76" y="797">bcrypt hash · 4–6 digits</text>
+  <text class="bs" x="76" y="814">Five failed attempts → 10 min</text>
+  <text class="bs" x="76" y="828">lockout on the Pin record.</text>
+
+  <rect x="330" y="756" width="254" height="78" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="346" y="778">Passkey (WebAuthn)</text>
+  <text class="bs" x="346" y="797">@simplewebauthn/server</text>
+  <text class="bs" x="346" y="814">Real assertion — the Face ID /</text>
+  <text class="bs" x="346" y="828">fingerprint gate in the app.</text>
+
+  <rect x="600" y="756" width="254" height="78" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="616" y="778">Face template</text>
+  <text class="bs" x="616" y="797">lib/faceCrypto · faceMatch</text>
+  <text class="bs" x="616" y="814">Encrypted descriptor stored</text>
+  <text class="bs" x="616" y="828">server side, never the image.</text>
+
+  <rect x="870" y="756" width="254" height="78" rx="10" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="bt" x="886" y="778">OTP</text>
+  <text class="bs" x="886" y="797">Mongo TTL index expires it.</text>
+  <text class="warn" x="886" y="816">Fixed prototype code —</text>
+  <text class="warn" x="886" y="830">there is no SMS gateway.</text>
+
+  <!-- ══ gap 3 ══ -->
+  <line x1="575" y1="850" x2="575" y2="888" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <line x1="635" y1="888" x2="635" y2="850" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="arr" x="655" y="868">req.authUser attached · identity confirmed</text>
+  <text class="arrb" x="655" y="884">Public routes skip this layer entirely (see below).</text>
+  <text class="arrb" x="555" y="874" text-anchor="end">401 · 403</text>
+
+  <!-- ══════════ LAYER 4 — ROUTES ══════════ -->
+  <rect x="40" y="890" width="1120" height="216" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="890" width="1120" height="34" rx="14" fill="#1D4ED8"/>
+  <rect x="40" y="910" width="1120" height="14" fill="#1D4ED8"/>
+  <text class="laynum" x="56" y="912">04</text>
+  <text class="lay" x="82" y="912">BACKEND SERVICES — route families</text>
+  <text class="bs" x="856" y="912" fill="#BFDBFE">41 routes, all in Backend/server.js</text>
+
+  <rect x="60" y="940" width="205" height="150" rx="10" fill="#F5F8FF" stroke="#D8E3F8"/>
+  <text class="bt" x="74" y="962">Identity</text>
+  <text class="bm" x="74" y="983">/api/otp/send</text>
+  <text class="bm" x="74" y="999">/api/otp/verify</text>
+  <text class="bm" x="74" y="1015">/api/register-symbol</text>
+  <text class="bm" x="74" y="1031">/api/users/available</text>
+  <text class="bm" x="74" y="1047">/api/users/resolve</text>
+  <text class="bs" x="74" y="1070" fill="#1D4ED8">available → one boolean,</text>
+  <text class="bs" x="74" y="1084" fill="#1D4ED8">deliberately no PII.</text>
+
+  <rect x="281" y="940" width="205" height="150" rx="10" fill="#F5F8FF" stroke="#D8E3F8"/>
+  <text class="bt" x="295" y="962">Credentials</text>
+  <text class="bm" x="295" y="983">/api/login</text>
+  <text class="bm" x="295" y="999">/api/pin/set|verify|reset</text>
+  <text class="bm" x="295" y="1015">/api/passkey/register/*</text>
+  <text class="bm" x="295" y="1031">/api/passkey/auth/*</text>
+  <text class="bm" x="295" y="1047">/api/face/*</text>
+  <text class="bs" x="295" y="1070" fill="#1D4ED8">Issues the bearer token</text>
+  <text class="bs" x="295" y="1084" fill="#1D4ED8">on success.</text>
+
+  <rect x="502" y="940" width="205" height="150" rx="10" fill="#F5F8FF" stroke="#D8E3F8"/>
+  <text class="bt" x="516" y="962">Profile &amp; catalogue</text>
+  <text class="bm" x="516" y="983">/api/profile/:symbolId</text>
+  <text class="bm" x="516" y="999">/api/profile/change-…</text>
+  <text class="bm" x="516" y="1015">/api/referrals/:id</text>
+  <text class="bm" x="516" y="1031">/api/creator/cashback</text>
+  <text class="bm" x="516" y="1047">/api/products · /interest</text>
+  <text class="bs" x="516" y="1070" fill="#1D4ED8">/profile/count declared</text>
+  <text class="bs" x="516" y="1084" fill="#1D4ED8">above /profile/:id.</text>
+
+  <rect x="723" y="940" width="205" height="150" rx="10" fill="#F5F8FF" stroke="#D8E3F8"/>
+  <text class="bt" x="737" y="962">Money</text>
+  <text class="bm" x="737" y="983">/api/transactions/send</text>
+  <text class="bm" x="737" y="999">/api/transactions/…</text>
+  <text class="bm" x="737" y="1015">/api/assets/:symbolId</text>
+  <text class="bm" x="737" y="1031">/api/assets/plant-seed</text>
+  <text class="bm" x="737" y="1047">/api/assets/paylater/:id</text>
+  <text class="bs" x="737" y="1070" fill="#1D4ED8">PIN required on send;</text>
+  <text class="bs" x="737" y="1084" fill="#1D4ED8">checked before balance.</text>
+
+  <rect x="944" y="940" width="205" height="150" rx="10" fill="#EEFBF5" stroke="#BFE8D6"/>
+  <text class="bt" x="958" y="962">Gloobal Coin</text>
+  <text class="bm" x="958" y="983">/api/coin/mint</text>
+  <text class="bm" x="958" y="999">/api/coin/redeem</text>
+  <text class="bm" x="958" y="1015">/api/coin/send</text>
+  <text class="bm" x="958" y="1031">/api/coin/:symbolId</text>
+  <text class="bm" x="958" y="1047">/api/coin/supply</text>
+  <text class="bs" x="958" y="1070" fill="#0F766E">/supply is public and</text>
+  <text class="bs" x="958" y="1084" fill="#0F766E">declared above /:symbolId.</text>
+
+  <!-- ══ gap 4 ══ -->
+  <line x1="575" y1="1108" x2="575" y2="1146" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <line x1="635" y1="1146" x2="635" y2="1108" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="arr" x="655" y="1126">Validated inputs handed to the domain rules</text>
+  <text class="arrb" x="655" y="1142">Amount, identity and format checks already done.</text>
+  <text class="arrb" x="555" y="1132" text-anchor="end">400 on bad input</text>
+
+  <!-- ══════════ LAYER 5 — BUSINESS LOGIC ══════════ -->
+  <rect x="40" y="1148" width="1120" height="234" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="1148" width="1120" height="34" rx="14" fill="#0F766E"/>
+  <rect x="40" y="1168" width="1120" height="14" fill="#0F766E"/>
+  <text class="laynum" x="56" y="1170">05</text>
+  <text class="lay" x="82" y="1170">BUSINESS LOGIC — where money is actually protected</text>
+
+  <rect x="60" y="1198" width="254" height="168" rx="10" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="76" y="1221">withMongoTransaction</text>
+  <text class="bs" x="76" y="1241">Probes once whether the</text>
+  <text class="bs" x="76" y="1258">deployment supports multi-doc</text>
+  <text class="bs" x="76" y="1275">transactions and remembers.</text>
+  <text class="bs" x="76" y="1296">Atlas is a replica set → yes.</text>
+  <text class="bs" x="76" y="1317">Returns { value, atomic }; when</text>
+  <text class="bs" x="76" y="1334">atomic is false the caller</text>
+  <text class="bs" x="76" y="1351">compensates by hand.</text>
+
+  <rect x="330" y="1198" width="254" height="168" rx="10" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="346" y="1221">Transfer engine</text>
+  <text class="bs" x="346" y="1241">The debit is conditional, and</text>
+  <text class="bs" x="346" y="1258">that is the whole guard:</text>
+  <text class="bm" x="346" y="1280">balance: { $gte: amount }</text>
+  <text class="bs" x="346" y="1301">Ten concurrent sends of 800</text>
+  <text class="bs" x="346" y="1318">against 1000 → exactly one</text>
+  <text class="bs" x="346" y="1335">commits. Splits creator</text>
+  <text class="bs" x="346" y="1352">cashback, plants asset seed.</text>
+
+  <rect x="600" y="1198" width="254" height="168" rx="10" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="616" y="1221">Coin engine — fully backed</text>
+  <text class="bs" x="616" y="1241">Mint: fiat out, coin issued 1:1.</text>
+  <text class="bs" x="616" y="1258">Redeem: the exact inverse.</text>
+  <text class="bs" x="616" y="1275">Send: supply untouched.</text>
+  <text class="bs" x="616" y="1298" font-weight="700" fill="#0F766E">Invariant, checked not claimed:</text>
+  <text class="bm" x="616" y="1319">reserve == issued ==</text>
+  <text class="bm" x="616" y="1335">sum(User.coinBalance)</text>
+  <text class="bs" x="616" y="1356">Three separate writes agreeing.</text>
+
+  <rect x="870" y="1198" width="254" height="168" rx="10" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="886" y="1221">Ledger &amp; audit</text>
+  <text class="bs" x="886" y="1241">Every movement writes a</text>
+  <text class="bs" x="886" y="1258">Transaction plus its</text>
+  <text class="bs" x="886" y="1275">LedgerEntry lines, inside the</text>
+  <text class="bs" x="886" y="1292">same transaction — the row and</text>
+  <text class="bs" x="886" y="1309">the balances commit together.</text>
+  <text class="bs" x="886" y="1330">referenceId: 20 Gloobal symbols,</text>
+  <text class="bs" x="886" y="1347">unique-indexed, ties the sender's</text>
+  <text class="bs" x="886" y="1361">receipt to the receiver's row.</text>
+
+  <!-- ══ gap 5 ══ -->
+  <line x1="575" y1="1384" x2="575" y2="1422" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <line x1="635" y1="1422" x2="635" y2="1384" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="arr" x="655" y="1402">Mongoose · session-scoped writes · conditional updates</text>
+  <text class="arrb" x="655" y="1418">Every write inside a transaction carries its session.</text>
+  <text class="arrb" x="555" y="1408" text-anchor="end">documents</text>
+
+  <!-- ══════════ LAYER 6 — DATABASE ══════════ -->
+  <rect x="40" y="1424" width="1120" height="292" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="1424" width="1120" height="34" rx="14" fill="#166534"/>
+  <rect x="40" y="1444" width="1120" height="14" fill="#166534"/>
+  <text class="laynum" x="56" y="1446">06</text>
+  <text class="lay" x="82" y="1446">DATABASE — MongoDB Atlas</text>
+  <text class="bs" x="806" y="1446" fill="#BBF7D0">Replica set · multi-document transactions · db: gloobal_db</text>
+
+  <text class="lbl" x="60" y="1482" fill="#8A93A6">COLLECTIONS — 14 models, 12 written by the API</text>
+
+  <rect x="60" y="1492" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="74" y="1512">User</text>
+  <text class="chips" x="74" y="1528">balance · coinBalance · passkeys</text>
+
+  <rect x="275" y="1492" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="289" y="1512">Transaction</text>
+  <text class="chips" x="289" y="1528">9 types incl. 3 coin · referenceId</text>
+
+  <rect x="490" y="1492" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="504" y="1512">LedgerEntry</text>
+  <text class="chips" x="504" y="1528">debit / credit · before → after</text>
+
+  <rect x="705" y="1492" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="719" y="1512">CoinReserve</text>
+  <text class="chips" x="719" y="1528">singleton · reserve · issued</text>
+
+  <rect x="920" y="1492" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="934" y="1512">Pin</text>
+  <text class="chips" x="934" y="1528">bcrypt · failedAttempts · lock</text>
+
+  <rect x="60" y="1548" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="74" y="1568">Otp</text>
+  <text class="chips" x="74" y="1584">TTL index on expiresAt</text>
+
+  <rect x="275" y="1548" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="289" y="1568">FaceTemplate</text>
+  <text class="chips" x="289" y="1584">encrypted descriptor</text>
+
+  <rect x="490" y="1548" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="504" y="1568">Referral</text>
+  <text class="chips" x="504" y="1584">referralChain array</text>
+
+  <rect x="705" y="1548" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="719" y="1568">AssetSeed</text>
+  <text class="chips" x="719" y="1584">cashback grown forward</text>
+
+  <rect x="920" y="1548" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="934" y="1568">Interest</text>
+  <text class="chips" x="934" y="1584">"I am IN" waitlist</text>
+
+  <rect x="60" y="1604" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="74" y="1624">Product</text>
+  <text class="chips" x="74" y="1640">bank · coin · live flag</text>
+
+  <rect x="275" y="1604" width="200" height="46" rx="8" fill="#F2FAF5" stroke="#CBE9D5"/>
+  <text class="chip" x="289" y="1624">ProductService</text>
+  <text class="chips" x="289" y="1640">live / planned rows</text>
+
+  <rect x="490" y="1604" width="200" height="46" rx="8" fill="#FBF7F3" stroke="#E9DDD0" stroke-dasharray="4 3"/>
+  <text class="chip" x="504" y="1624" fill="#92400E">AuditLog</text>
+  <text class="chips" x="504" y="1640" fill="#92400E">declared · never written</text>
+
+  <rect x="705" y="1604" width="200" height="46" rx="8" fill="#FBF7F3" stroke="#E9DDD0" stroke-dasharray="4 3"/>
+  <text class="chip" x="719" y="1624" fill="#92400E">Notification</text>
+  <text class="chips" x="719" y="1640" fill="#92400E">declared · never written</text>
+
+  <rect x="920" y="1604" width="200" height="46" rx="8" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="chip" x="934" y="1624" fill="#92400E">Seed on boot</text>
+  <text class="chips" x="934" y="1640" fill="#92400E">catalogue, insert-only</text>
+
+  <rect x="60" y="1662" width="1060" height="42" rx="8" fill="#FFFBF3" stroke="#F5E4C8"/>
+  <text class="warn" x="76" y="1679">The only scheduled mechanism in the whole system is Mongo's TTL index on Otp.expiresAt. There is no application scheduler,</text>
+  <text class="warn" x="76" y="1695">no queue and no worker process — see the asynchronous panel on the right.</text>
+
+  <!-- ══════════ LAYER 7 — OPERATIONS ══════════ -->
+  <rect x="40" y="1748" width="1120" height="182" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="40" y="1748" width="1120" height="34" rx="14" fill="#334155"/>
+  <rect x="40" y="1768" width="1120" height="14" fill="#334155"/>
+  <text class="laynum" x="56" y="1770">07</text>
+  <text class="lay" x="82" y="1770">LOGGING, MONITORING &amp; OPERATIONAL FLOW</text>
+
+  <rect x="60" y="1798" width="350" height="112" rx="10" fill="#F6F8FA" stroke="#DDE3EE"/>
+  <text class="bt" x="76" y="1821">Application logs</text>
+  <text class="bm" x="76" y="1842">console.error(...)</text>
+  <text class="bs" x="76" y="1863">Every route's catch block writes a</text>
+  <text class="bs" x="76" y="1880">named error, collected by Render's</text>
+  <text class="bs" x="76" y="1897">platform log stream. Nothing else.</text>
+
+  <rect x="425" y="1798" width="350" height="112" rx="10" fill="#F6F8FA" stroke="#DDE3EE"/>
+  <text class="bt" x="441" y="1821">Self-checking data</text>
+  <text class="bs" x="441" y="1842">GET /api/coin/supply compares three</text>
+  <text class="bs" x="441" y="1859">independently maintained figures and</text>
+  <text class="bs" x="441" y="1876">reports the comparison. The app shows</text>
+  <text class="bs" x="441" y="1893">a red banner when they disagree.</text>
+
+  <rect x="790" y="1798" width="350" height="112" rx="10" fill="#FFF5F5" stroke="#F5CFCF"/>
+  <text class="bt" x="806" y="1821" fill="#7F1D1D">Gap — no APM or error tracking</text>
+  <text class="neg" x="806" y="1842">No Sentry, no structured logger, no</text>
+  <text class="neg" x="806" y="1859">metrics, no alerting, no uptime check.</text>
+  <text class="neg" x="806" y="1876">A 500 in production is visible only by</text>
+  <text class="neg" x="806" y="1893">reading Render's logs by hand.</text>
+
+  <!-- ══════════ NOT PRESENT ══════════ -->
+  <rect x="40" y="1962" width="1120" height="262" rx="14" fill="#FFFFFF" stroke="#F0D5D5" stroke-width="1.5"/>
+  <rect x="40" y="1962" width="1120" height="34" rx="14" fill="#991B1B"/>
+  <rect x="40" y="1982" width="1120" height="14" fill="#991B1B"/>
+  <text class="lay" x="60" y="1984">NOT IN THIS ARCHITECTURE — drawn so nobody assumes otherwise</text>
+
+  <rect x="60" y="2012" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="76" y="2034" fill="#7F1D1D">Cache layer</text>
+  <text class="neg" x="76" y="2054">No Redis, no Memcached. Rate buckets</text>
+  <text class="neg" x="76" y="2071">live in process memory; every read goes</text>
+  <text class="neg" x="76" y="2088">straight to Atlas.</text>
+
+  <rect x="425" y="2012" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="441" y="2034" fill="#7F1D1D">Queue &amp; background workers</text>
+  <text class="neg" x="441" y="2054">No BullMQ, Agenda or cron. Every unit of</text>
+  <text class="neg" x="441" y="2071">work completes inside the request that</text>
+  <text class="neg" x="441" y="2088">asked for it, or not at all.</text>
+
+  <rect x="790" y="2012" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="806" y="2034" fill="#7F1D1D">Object / file storage</text>
+  <text class="neg" x="806" y="2054">No S3, no Cloudinary, no multer. Profile</text>
+  <text class="neg" x="806" y="2071">photos are held in the browser's own</text>
+  <text class="neg" x="806" y="2088">localStorage — see the note opposite.</text>
+
+  <rect x="60" y="2112" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="76" y="2134" fill="#7F1D1D">Notifications</text>
+  <text class="neg" x="76" y="2154">No SMS gateway, no push, no email from</text>
+  <text class="neg" x="76" y="2171">the API. OTP is a fixed prototype code.</text>
+  <text class="neg" x="76" y="2188">report-mailer is a separate local tool.</text>
+
+  <rect x="425" y="2112" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="441" y="2134" fill="#7F1D1D">Realtime transport</text>
+  <text class="neg" x="441" y="2154">No WebSocket, no SSE, no polling loop.</text>
+  <text class="neg" x="441" y="2171">The client learns about changes only by</text>
+  <text class="neg" x="441" y="2188">making a request.</text>
+
+  <rect x="790" y="2112" width="350" height="88" rx="10" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="806" y="2134" fill="#7F1D1D">Outbound integrations</text>
+  <text class="neg" x="806" y="2154">The API server makes no outbound HTTP</text>
+  <text class="neg" x="806" y="2171">calls at all. No webhooks in or out, no</text>
+  <text class="neg" x="806" y="2188">third-party API consumed server side.</text>
+
+  <!-- ══════════ SIDE — EXTERNAL ══════════ -->
+  <rect x="1190" y="126" width="470" height="232" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="1190" y="126" width="470" height="34" rx="14" fill="#1E40AF"/>
+  <rect x="1190" y="146" width="470" height="14" fill="#1E40AF"/>
+  <text class="laynum" x="1206" y="148">10</text>
+  <text class="lay" x="1232" y="148">EXTERNAL SERVICES</text>
+
+  <rect x="1208" y="176" width="434" height="52" rx="8" fill="#EFF5FF" stroke="#D3E1F8"/>
+  <text class="bs" x="1222" y="196" font-weight="700" fill="#1E40AF">Fetched by the browser, never by the server.</text>
+  <text class="bs" x="1222" y="216">Each origin is allowlisted in the netlify.toml CSP.</text>
+
+  <rect x="1208" y="238" width="209" height="52" rx="8" fill="#F7FAFF" stroke="#D3E1F8"/>
+  <text class="chip" x="1222" y="258">flagcdn.com</text>
+  <text class="chips" x="1222" y="274">country flag images</text>
+
+  <rect x="1433" y="238" width="209" height="52" rx="8" fill="#F7FAFF" stroke="#D3E1F8"/>
+  <text class="chip" x="1447" y="258">logo.clearbit.com</text>
+  <text class="chips" x="1447" y="274">bank logos</text>
+
+  <rect x="1208" y="298" width="209" height="48" rx="8" fill="#F7FAFF" stroke="#D3E1F8"/>
+  <text class="chip" x="1222" y="318">fonts.g*.com</text>
+  <text class="chips" x="1222" y="334">Space Grotesk, Inter</text>
+
+  <rect x="1433" y="298" width="209" height="48" rx="8" fill="#F7FAFF" stroke="#D3E1F8"/>
+  <text class="chip" x="1447" y="318">raw.githubusercontent</text>
+  <text class="chips" x="1447" y="334">globe texture</text>
+
+  <!-- ══════════ SIDE — DEPLOYMENT ══════════ -->
+  <rect x="1190" y="386" width="470" height="330" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="1190" y="386" width="470" height="34" rx="14" fill="#111827"/>
+  <rect x="1190" y="406" width="470" height="14" fill="#111827"/>
+  <text class="laynum" x="1206" y="408">13</text>
+  <text class="lay" x="1232" y="408">DEPLOYMENT / INFRASTRUCTURE</text>
+
+  <rect x="1208" y="436" width="434" height="82" rx="8" fill="#F6F8FA" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="458">Netlify — frontend</text>
+  <text class="bs" x="1222" y="477">Static SPA build, SPA rewrite to index.html,</text>
+  <text class="bs" x="1222" y="494">strict CSP, immutable hashing on /assets.</text>
+  <text class="bs" x="1222" y="511">Repo: gloobal-pay-gloobal/-GloobalV3</text>
+
+  <rect x="1208" y="528" width="434" height="98" rx="8" fill="#F6F8FA" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="550">Render — API</text>
+  <text class="bs" x="1222" y="569">Node 20 web service, auto-deploys on push</text>
+  <text class="bs" x="1222" y="586">to main (~30 s). Free tier sleeps: cold start</text>
+  <text class="bs" x="1222" y="603">20–50 s, which is why the client allows 45 s.</text>
+  <text class="warn" x="1222" y="620">Single instance — see the rate-limit caveat.</text>
+
+  <rect x="1208" y="636" width="434" height="66" rx="8" fill="#F6F8FA" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="658">Two repositories</text>
+  <text class="bs" x="1222" y="677">Frontend and backend are separate checkouts</text>
+  <text class="bs" x="1222" y="694">and deploy independently — order matters.</text>
+
+  <!-- ══════════ SIDE — FRONTEND CHANGE ══════════ -->
+  <rect x="1190" y="744" width="470" height="204" rx="14" fill="#FFFDF7" stroke="#EBCF9A" stroke-width="2"/>
+  <rect x="1190" y="744" width="470" height="34" rx="14" fill="#B45309"/>
+  <rect x="1190" y="764" width="470" height="14" fill="#B45309"/>
+  <text class="lay" x="1206" y="766">REQUIRED FRONTEND CHANGE</text>
+
+  <rect x="1208" y="792" width="434" height="54" rx="8" fill="#FFFFFF" stroke="#EBCF9A"/>
+  <text class="bt" x="1222" y="814" fill="#92400E">Today: none.</text>
+  <text class="bs" x="1222" y="834">The existing client already speaks to every route drawn here.</text>
+
+  <rect x="1208" y="856" width="434" height="84" rx="8" fill="#FFF8EC" stroke="#EBCF9A" stroke-dasharray="4 3"/>
+  <text class="bt" x="1222" y="878" fill="#92400E">Conditional — profile photos</text>
+  <text class="warn" x="1222" y="897">Held in browser localStorage, so a photo does not follow</text>
+  <text class="warn" x="1222" y="913">the account across devices. Adding object storage is the</text>
+  <text class="warn" x="1222" y="929">one change that would require client work to upload.</text>
+
+  <!-- ══════════ SIDE — ASYNC ══════════ -->
+  <rect x="1190" y="956" width="470" height="252" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="1190" y="956" width="470" height="34" rx="14" fill="#7C2D12"/>
+  <rect x="1190" y="976" width="470" height="14" fill="#7C2D12"/>
+  <text class="laynum" x="1206" y="978">09</text>
+  <text class="lay" x="1232" y="978">ASYNCHRONOUS &amp; BACKGROUND</text>
+
+  <rect x="1208" y="1006" width="434" height="46" rx="8" fill="#FFF7ED" stroke="#F0D9BC"/>
+  <text class="bs" x="1222" y="1026" font-weight="700" fill="#7C2D12">There is no queue and no worker process.</text>
+  <text class="bs" x="1222" y="1043">The two mechanisms below are the entire story.</text>
+
+  <rect x="1208" y="1062" width="434" height="66" rx="8" fill="#FDFBF8" stroke="#F0D9BC"/>
+  <text class="bt" x="1222" y="1084">1 · Mongo TTL index</text>
+  <text class="bm" x="1222" y="1104">Otp.expiresAt · expireAfterSeconds: 0</text>
+  <text class="bs" x="1222" y="1120">Expiry runs inside the database, not the app.</text>
+
+  <rect x="1208" y="1138" width="434" height="58" rx="8" fill="#FDFBF8" stroke="#F0D9BC"/>
+  <text class="bt" x="1222" y="1160">2 · Rate-bucket sweep</text>
+  <text class="bm" x="1222" y="1180">setInterval(…, 60_000).unref()</text>
+  <text class="bs" x="1222" y="1190">In-process, drops expired buckets. Not durable.</text>
+
+  <!-- ══════════ SIDE — LEGEND ══════════ -->
+  <rect x="1190" y="1236" width="470" height="286" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="1190" y="1236" width="470" height="34" rx="14" fill="#475569"/>
+  <rect x="1190" y="1256" width="470" height="14" fill="#475569"/>
+  <text class="lay" x="1206" y="1258">LEGEND</text>
+
+  <line x1="1214" y1="1292" x2="1266" y2="1292" stroke="#7C3AED" stroke-width="2.5" marker-end="url(#aReq)"/>
+  <text class="bs" x="1280" y="1296">Request flow — client toward data</text>
+
+  <line x1="1214" y1="1322" x2="1266" y2="1322" stroke="#9AA3B2" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aRes)"/>
+  <text class="bs" x="1280" y="1326">Response flow — JSON back to client</text>
+
+  <line x1="1214" y1="1352" x2="1266" y2="1352" stroke="#2563EB" stroke-width="2" marker-end="url(#aExt)"/>
+  <text class="bs" x="1280" y="1356">Browser → external origin (CDN)</text>
+
+  <rect x="1214" y="1376" width="52" height="18" rx="5" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bs" x="1280" y="1390">Verified working, with tests</text>
+
+  <rect x="1214" y="1406" width="52" height="18" rx="5" fill="#FBF7F3" stroke="#E9DDD0" stroke-dasharray="4 3"/>
+  <text class="bs" x="1280" y="1420">Declared in code but never used</text>
+
+  <rect x="1214" y="1436" width="52" height="18" rx="5" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bs" x="1280" y="1450">Absent — deliberately shown</text>
+
+  <rect x="1214" y="1466" width="52" height="18" rx="5" fill="#FFF8EC" stroke="#EBCF9A"/>
+  <text class="bs" x="1280" y="1480">Caveat or operational risk</text>
+
+  <text class="bs" x="1214" y="1508" fill="#8A93A6">Dashed borders mean "exists in the schema, carries no data".</text>
+
+  <!-- ══════════ SIDE — TEST COVERAGE ══════════ -->
+  <rect x="1190" y="1550" width="470" height="674" rx="14" fill="#FFFFFF" stroke="#DDE3EE" stroke-width="1.5"/>
+  <rect x="1190" y="1550" width="470" height="34" rx="14" fill="#0F766E"/>
+  <rect x="1190" y="1570" width="470" height="14" fill="#0F766E"/>
+  <text class="lay" x="1206" y="1572">WHAT IS ACTUALLY PROVEN</text>
+
+  <rect x="1208" y="1600" width="434" height="88" rx="8" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="1222" y="1622">Backend — 3 suites, all passing</text>
+  <text class="bs" x="1222" y="1642">Run against a throwaway database on the same</text>
+  <text class="bs" x="1222" y="1659">Atlas cluster, so transaction behaviour matches</text>
+  <text class="bs" x="1222" y="1676">production exactly. Dropped after each run.</text>
+
+  <rect x="1208" y="1698" width="434" height="80" rx="8" fill="#FDFDFD" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="1720">coin-supply-invariant · 47 checks</text>
+  <text class="bs" x="1222" y="1740">Concurrent mints against one balance; concurrent</text>
+  <text class="bs" x="1222" y="1757">sends of the same coin; the three-way invariant</text>
+  <text class="bs" x="1222" y="1772">re-asserted after every operation.</text>
+
+  <rect x="1208" y="1788" width="434" height="80" rx="8" fill="#FDFDFD" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="1810">transfer-atomicity</text>
+  <text class="bs" x="1222" y="1830">Ten concurrent sends of 800 against a balance of</text>
+  <text class="bs" x="1222" y="1847">1000. Written to fail against the pre-fix version,</text>
+  <text class="bs" x="1222" y="1862">which is how it was confirmed to detect the bug.</text>
+
+  <rect x="1208" y="1878" width="434" height="64" rx="8" fill="#FDFDFD" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="1900">auth-and-access</text>
+  <text class="bs" x="1222" y="1920">Token forgery and expiry, cross-account reads,</text>
+  <text class="bs" x="1222" y="1936">CORS allowlist, rate limiting.</text>
+
+  <rect x="1208" y="1954" width="434" height="88" rx="8" fill="#F1FBF7" stroke="#C9EADC"/>
+  <text class="bt" x="1222" y="1976">Frontend — 202 domain tests</text>
+  <text class="bs" x="1222" y="1996">The client-side ledger is tested independently of</text>
+  <text class="bs" x="1222" y="2013">the server: books balance per currency, coin cannot</text>
+  <text class="bs" x="1222" y="2030">be added to fiat, reconciliation ignores junk.</text>
+
+  <rect x="1208" y="2052" width="434" height="72" rx="8" fill="#FDFDFD" stroke="#DDE3EE"/>
+  <text class="bt" x="1222" y="2074">Render-time probes</text>
+  <text class="bs" x="1222" y="2094">scan-undeclared (0), probe-panels (3/3),</text>
+  <text class="bs" x="1222" y="2111">probe-stages (10/10), probe-screens (194 countries).</text>
+
+  <rect x="1208" y="2134" width="434" height="74" rx="8" fill="#FFF7F7" stroke="#F5DADA"/>
+  <text class="bt" x="1222" y="2156" fill="#7F1D1D">Not covered by any test</text>
+  <text class="neg" x="1222" y="2176">Passkey and face flows, OTP delivery, the seed</text>
+  <text class="neg" x="1222" y="2193">migrations, and every screen's event handlers.</text>
+
+  <text class="bs" x="40" y="2246" fill="#8A93A6">Generated from the codebase on 2026-08-15 · Boxes marked absent were checked against package.json dependencies and route definitions, not assumed.</text>
+</svg>

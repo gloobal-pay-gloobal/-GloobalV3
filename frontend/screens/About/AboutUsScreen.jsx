@@ -24,7 +24,7 @@ function AboutUsScreen({ onBack, heroColor, onShowToast }) {
         Cashless · Taxless · Borderless · Limitless
       </div></div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "18px" }}><div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Our Mission</div><div style={{ fontSize: 12.5, color: T.inkFaint, marginTop: 6, lineHeight: 1.5 }}>
         We're building one Gloobal ID that moves money the way people actually move — across countries, currencies, and platforms — without the fees, forms, or borders getting in the way.
-      </div></div><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 4 }}><span
+      </div></div><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 4, flexShrink: 0 }}><span
     style={{
       position: "absolute",
       top: 0,
@@ -42,7 +42,7 @@ function AboutUsScreen({ onBack, heroColor, onShowToast }) {
   >What We Offer</span>{OFFERS.map((item, i) => <div
     key={item.label}
     style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span></div>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span></div>{["Terms of Service", "Privacy Policy"].map((label) => <button
+  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span></div>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", flexShrink: 0 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span></div>{["Terms of Service", "Privacy Policy"].map((label) => <button
     key={label}
     onClick={() => onShowToast && onShowToast(`${label} coming soon`)}
     className="v2-row"

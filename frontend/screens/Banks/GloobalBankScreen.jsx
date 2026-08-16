@@ -74,7 +74,7 @@ function GloobalBankScreen({
        sending or receiving. Empty is stated as empty; a balance screen
        with nothing under it should say so instead of rendering a blank
        card that reads as a failed load. */
-  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px" }}><span
+  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px", flexShrink: 0 }}><span
     style={{
       position: "absolute",
       top: 0,

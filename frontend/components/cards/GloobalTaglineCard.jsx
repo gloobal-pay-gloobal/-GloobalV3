@@ -91,7 +91,7 @@ var SERVICE_ROW_ICONS = {
 // product that isn't live. This renders what it is given and decides
 // nothing about truth.
 function ProductServicesCard({ services }) {
-  return <div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14 }}><span
+  return <div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, flexShrink: 0 }}><span
     style={{
       position: "absolute",
       top: 0,

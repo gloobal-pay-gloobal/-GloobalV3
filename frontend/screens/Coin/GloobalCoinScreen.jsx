@@ -190,7 +190,7 @@ function GloobalCoinScreen({
        separate history fetch — every one of them was posted there by the
        action that caused it, so this list cannot disagree with the
        balance above it. */
-  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px" }}><span
+  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px", flexShrink: 0 }}><span
     style={{
       position: "absolute",
       top: 0,

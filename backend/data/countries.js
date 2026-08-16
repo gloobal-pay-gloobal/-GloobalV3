@@ -252,56 +252,49 @@ var MOBILE_DIGIT_RANGE_BY_ISO = {
   IS: [7, 7]
 };
 var DEFAULT_MOBILE_DIGIT_RANGE = [10, 10];
+// ISO 3166-1 alpha-2 -> ISO 4217 currency code, for every country in
+// TOP_COUNTRIES + REST_COUNTRIES above. Used to be 49 entries — exactly
+// TOP_COUNTRIES and no more — so every one of the ~145 REST_COUNTRIES fell
+// back to whatever default the reading screen chose (mostly "USD"),
+// showing the wrong currency symbol and a wrongly-converted amount for the
+// large majority of countries on the Coverage screen's All Countries /
+// Spending breakdown views (and anywhere else this map is read — App.jsx,
+// Dashboard, SendMoney, History). This is the same standard ISO 3166/4217
+// reference data already compiled once for the Backend's
+// Backend/data/countryCurrencyMap.js (the multi-currency pool work) —
+// reused here rather than re-derived, so the two stay in agreement. See
+// that file's header comment for the handful of genuinely unsettled real-
+// world cases (Zimbabwe, Palestine, North Korea) it had to pick an answer
+// for.
 var COUNTRY_CURRENCY = {
-  US: "USD",
-  GB: "GBP",
-  CA: "CAD",
-  AU: "AUD",
-  DE: "EUR",
-  FR: "EUR",
-  IT: "EUR",
-  ES: "EUR",
-  NL: "EUR",
-  BE: "EUR",
-  AT: "EUR",
-  PT: "EUR",
-  IE: "EUR",
-  FI: "EUR",
-  GR: "EUR",
-  CH: "CHF",
-  SE: "SEK",
-  NO: "NOK",
-  DK: "DKK",
-  PL: "PLN",
-  RU: "RUB",
-  TR: "TRY",
-  UA: "UAH",
-  IN: "INR",
-  CN: "CNY",
-  JP: "JPY",
-  KR: "KRW",
-  ID: "IDR",
-  PH: "PHP",
-  VN: "VND",
-  TH: "THB",
-  MY: "MYR",
-  SG: "SGD",
-  PK: "PKR",
-  BD: "BDT",
-  SA: "SAR",
-  AE: "AED",
-  IL: "ILS",
-  EG: "EGP",
-  ZA: "ZAR",
-  NG: "NGN",
-  KE: "KES",
-  BR: "BRL",
-  MX: "MXN",
-  AR: "ARS",
-  CL: "CLP",
-  CO: "COP",
-  PE: "PEN",
-  NZ: "NZD",
-  IS: "ISK"
+  US: "USD", GB: "GBP", CA: "CAD", AU: "AUD", DE: "EUR", FR: "EUR", IT: "EUR",
+  ES: "EUR", NL: "EUR", BE: "EUR", CH: "CHF", AT: "EUR", SE: "SEK", NO: "NOK",
+  DK: "DKK", FI: "EUR", IE: "EUR", PT: "EUR", PL: "PLN", GR: "EUR", RU: "RUB",
+  TR: "TRY", UA: "UAH", IN: "INR", CN: "CNY", JP: "JPY", KR: "KRW", ID: "IDR",
+  PH: "PHP", VN: "VND", TH: "THB", MY: "MYR", SG: "SGD", PK: "PKR", BD: "BDT",
+  SA: "SAR", AE: "AED", IL: "ILS", EG: "EGP", ZA: "ZAR", NG: "NGN", KE: "KES",
+  BR: "BRL", MX: "MXN", AR: "ARS", CL: "CLP", CO: "COP", PE: "PEN", NZ: "NZD",
+  IS: "ISK",
+  AF: "AFN", AL: "ALL", DZ: "DZD", AD: "EUR", AO: "AOA", AG: "XCD", AM: "AMD",
+  AZ: "AZN", BS: "BSD", BH: "BHD", BB: "BBD", BY: "BYN", BZ: "BZD", BJ: "XOF",
+  BT: "BTN", BO: "BOB", BA: "BAM", BW: "BWP", BN: "BND", BG: "BGN", BF: "XOF",
+  BI: "BIF", CV: "CVE", KH: "KHR", CM: "XAF", CF: "XAF", TD: "XAF", KM: "KMF",
+  CD: "CDF", CG: "XAF", CR: "CRC", HR: "EUR", CU: "CUP", CY: "EUR", CZ: "CZK",
+  DJ: "DJF", DM: "XCD", DO: "DOP", EC: "USD", SV: "USD", GQ: "XAF", ER: "ERN",
+  EE: "EUR", SZ: "SZL", ET: "ETB", FJ: "FJD", GA: "XAF", GM: "GMD", GE: "GEL",
+  GH: "GHS", GD: "XCD", GT: "GTQ", GN: "GNF", GW: "XOF", GY: "GYD", HT: "HTG",
+  HN: "HNL", HU: "HUF", JM: "JMD", JO: "JOD", KZ: "KZT", KI: "AUD", XK: "EUR",
+  KW: "KWD", KG: "KGS", LA: "LAK", LV: "EUR", LB: "LBP", LS: "LSL", LR: "LRD",
+  LY: "LYD", LI: "CHF", LT: "EUR", LU: "EUR", MG: "MGA", MW: "MWK", MV: "MVR",
+  ML: "XOF", MT: "EUR", MH: "USD", MR: "MRU", MU: "MUR", FM: "USD", MD: "MDL",
+  MC: "EUR", MN: "MNT", ME: "EUR", MA: "MAD", MZ: "MZN", MM: "MMK", NA: "NAD",
+  NR: "AUD", NP: "NPR", NI: "NIO", NE: "XOF", KP: "KPW", MK: "MKD", OM: "OMR",
+  PW: "USD", PS: "ILS", PA: "PAB", PG: "PGK", PY: "PYG", QA: "QAR", RO: "RON",
+  RW: "RWF", WS: "WST", SM: "EUR", ST: "STN", SN: "XOF", RS: "RSD", SC: "SCR",
+  SL: "SLE", SK: "EUR", SI: "EUR", SB: "SBD", SO: "SOS", SS: "SSP", LK: "LKR",
+  KN: "XCD", LC: "XCD", VC: "XCD", SD: "SDG", SR: "SRD", SY: "SYP", TW: "TWD",
+  TJ: "TJS", TZ: "TZS", TL: "USD", TG: "XOF", TO: "TOP", TT: "TTD", TN: "TND",
+  TM: "TMT", TV: "AUD", UG: "UGX", UY: "UYU", UZ: "UZS", VU: "VUV", VA: "EUR",
+  VE: "VES", YE: "YER", ZM: "ZMW", ZW: "ZWL"
 };
 
