@@ -80,6 +80,20 @@ function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
     // Storage unavailable — the app still works this session, it just won't
     // survive the next reload. Nothing to recover from.
   }
+  // Bug fix: a genuinely different account signing in — including the very
+  // first sign-in this page load, not just a same-account resave — used to
+  // notify nobody. Only gloobalSessionSetSymbolId (an in-place ID rename)
+  // fired GLOOBAL_SYMBOL_ID_EVENT, so nothing told the rest of the app "the
+  // signed-in account changed" on an ordinary login or a fresh registration.
+  // Concretely, GloobalArtifactRoot (src/__artifactEntry.jsx) keys its
+  // <LedgerProvider> and account-scoped tree off this event via
+  // useCurrentSymbolId() specifically so a NEW account gets a clean local
+  // ledger and a clean transaction-history list instead of inheriting
+  // whatever the PREVIOUS account (in the same tab, same page load) had
+  // accumulated — without this notification, that remount never happened,
+  // which is the root cause of a new account appearing to already have
+  // another account's balance and spending history.
+  if (!sameAccount) gloobalNotifySymbolIdChanged(user.symbolId);
 }
 
 // Returns { user, phoneNumber, biometricEnrolled } for a valid, unexpired
@@ -225,4 +239,9 @@ function gloobalSessionClear() {
     // A stale blob is harmless — gloobalSessionLoad re-validates shape on
     // every read.
   }
+  // Bug fix (see gloobalSessionSave's own comment): signing out is an
+  // account-identity change too — to "no account" — and the same remount
+  // needs to happen so the NEXT sign-in on this page doesn't inherit
+  // whoever just signed out's local ledger/history state.
+  gloobalNotifySymbolIdChanged(null);
 }

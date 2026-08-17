@@ -93,6 +93,50 @@ function mapServerTransaction(row, viewerSymbolId) {
   };
 }
 
+// Bug fix: a referral link (Dashboard.jsx's referralLink, resolved through
+// the backend's GET /r/:symbolId route) redirects a new visitor here as
+// https://gloobalv3.netlify.app/?ref=<encoded Gloobal ID> — but nothing
+// ever read that query param back out. The redirect worked, the person
+// landed on the right app, and then the referral code they'd followed a
+// link specifically to use was nowhere: not pre-filled, not applied,
+// gone. This reads it once on load so the referral dial pad already has
+// it by the time someone reaches that step of registration; it's still
+// editable and still optional (the referral stage has its own "Skip for
+// now"), exactly as if they'd typed it in themselves.
+function readReferralCodeFromUrl() {
+  if (typeof window === "undefined") return "";
+  try {
+    const raw = new URLSearchParams(window.location.search).get("ref");
+    return raw ? decodeURIComponent(raw).trim() : "";
+  } catch (e) {
+    return "";
+  }
+}
+// The permissions gate (PermissionsGateScreen) is a once-ever onboarding
+// screen, not something a returning visitor should see again on every
+// page load — so whether it's been shown lives in localStorage rather
+// than component state. Guarded the same way every other localStorage
+// access in this app is: a private-mode throw or a disabled store just
+// means "treat it as not yet seen" rather than crashing the app before
+// it has even rendered anything.
+var GLOOBAL_PERMISSIONS_GATE_KEY = "gloobal.permissionsGateSeen.v1";
+function hasSeenPermissionsGate() {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(GLOOBAL_PERMISSIONS_GATE_KEY) === "1";
+  } catch (e) {
+    return true;
+  }
+}
+function markPermissionsGateSeen() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(GLOOBAL_PERMISSIONS_GATE_KEY, "1");
+  } catch (e) {
+    // No storage — the gate will simply show again next load, which is a
+    // minor repeat, not a broken app.
+  }
+}
 // src/App.jsx
 function GloobalId() {
   const stageRef = useRef13(null);
@@ -552,7 +596,11 @@ function GloobalId() {
     settleReferralToBank(amount);
   };
   const handleExecuteTransaction = executeTransaction;
-  const [stage, setStage] = useState19("phone");
+  const [stage, setStage] = useState19(() => hasSeenPermissionsGate() ? "phone" : "permissions");
+  const handleContinueFromPermissionsGate = () => {
+    markPermissionsGateSeen();
+    setStage("phone");
+  };
   const [flipping, setFlipping] = useState19(false);
   const [secureId, setSecureId] = useState19("");
   // A second, separate Gloobal ID for the Creator side of the account
@@ -576,7 +624,19 @@ function GloobalId() {
     return () => clearInterval(interval);
   }, []);
   const [suggestedRegId] = useState19(() => genSuggestedId(12));
-  const [referralCode, setReferralCode] = useState19("");
+  const [referralCode, setReferralCode] = useState19(readReferralCodeFromUrl);
+  // The ?ref= param has done its job once it's been read into state above —
+  // left in place it would keep re-seeding referralCode (clobbering an edit
+  // or a deliberate clear) on every remount, and it would sit in the address
+  // bar and browser history indefinitely. Same cleanup shape as
+  // closeDiagnostics' hash removal below: strip the one param this app
+  // added, leave everything else in the URL untouched.
+  useEffect15(() => {
+    if (typeof window === "undefined" || !window.location.search.includes("ref=")) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("ref");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, []);
   const [pin, setPin] = useState19("");
   const [otp, setOtp] = useState19("123456");
   const [dialCountry, setDialCountry] = useState19(() => TOP_COUNTRIES.find((c) => c.iso === "IN") || TOP_COUNTRIES[0]);
@@ -720,7 +780,15 @@ function GloobalId() {
     if (storedProfile) {
       if (storedProfile.name) setDocumentedName(storedProfile.name);
       if (storedProfile.photo) setProfilePhoto(storedProfile.photo);
-    } else if (restored.user.fullName) {
+      // storedProfile.name is not guaranteed non-empty (persistLocalProfile
+      // writes "" when nothing was typed), so a stored-but-empty name still
+      // falls through to the server's real name below rather than leaving
+      // documentedName blank when the backend actually has one.
+    }
+    if ((!storedProfile || !storedProfile.name) && restored.user.fullName && restored.user.fullName !== restored.user.mobileNumber) {
+      // fullName is the mobile number on accounts made before the name step
+      // existed (see mapServerTransaction above for the same guard) — never
+      // show a phone number as someone's name.
       setDocumentedName(restored.user.fullName);
     }
     gloobalSetBiometricSymbolId(restored.user.symbolId || null);
@@ -1104,14 +1172,38 @@ function GloobalId() {
       GloobalApi.saveSession(result.user, phoneNumber);
       gloobalSetBiometricSymbolId(result.user.symbolId || symbolId);
       setLoginAuthPin("");
+      const loggedInSymbolId = result.user.symbolId || symbolId;
+      const localProfile = loadLocalProfile(loggedInSymbolId);
+      // Restore the name and photo for THIS login, not just the one at
+      // page-mount (see the session-restore effect above, which only ever
+      // runs once). handleStartOver blanks documentedName/profilePhoto back
+      // to "" and the Gloobal placeholder on sign-out; nothing repopulated
+      // them here, so anyone who signed out and back in during the same
+      // browser tab saw "Gloobal ID Member" instead of their real name even
+      // though it was safely stored both locally and on the backend the
+      // whole time. The backend is the authority (per persistLocalProfile's
+      // comment) except when its fullName is really just the account's own
+      // mobile number — true of accounts created before the name step
+      // existed, or before the register-symbol fix that stopped discarding
+      // a real name at signup — in which case the locally cached name, if
+      // there is one, is shown instead of a phone number.
+      const serverName =
+        result.user.fullName && result.user.fullName !== result.user.mobileNumber
+          ? result.user.fullName
+          : null;
+      if (serverName) {
+        setDocumentedName(serverName);
+      } else if (localProfile && localProfile.name) {
+        setDocumentedName(localProfile.name);
+      }
+      if (localProfile && localProfile.photo) setProfilePhoto(localProfile.photo);
       // The retry the registration step promises when PUT /api/profile
       // fails. The local copy is the one the person actually typed; if the
       // server still disagrees, push it again. Cheap, silent, and harmless
       // when it is already in sync (the condition is false). Never
       // awaited — a sign-in must not wait on a display name.
-      const localProfile = loadLocalProfile(result.user.symbolId || symbolId);
       if (localProfile && localProfile.name && localProfile.name !== result.user.fullName) {
-        GloobalApi.updateProfile(result.user.symbolId || symbolId, { fullName: localProfile.name }).catch(() => {});
+        GloobalApi.updateProfile(loggedInSymbolId, { fullName: localProfile.name }).catch(() => {});
       }
       // Whatever the local session claims, the server knows whether this
       // account actually has a passkey. Asked once, here, so the next
@@ -2027,7 +2119,7 @@ function GloobalId() {
     }}
   >
             Cashless · Taxless · Borderless · Limitless
-          </span></div>}{stage === "pin" && <PinScreen
+          </span></div>}{stage === "permissions" && <PermissionsGateScreen onContinue={handleContinueFromPermissionsGate} />}{stage === "pin" && <PinScreen
     value={pin}
     length={PIN_LENGTH}
     onChange={setPin}

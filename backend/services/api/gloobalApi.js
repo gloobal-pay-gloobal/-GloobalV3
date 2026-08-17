@@ -332,7 +332,13 @@ var GloobalApi = {
   },
 
   // GET /api/stats, falling back to GET /api/profile/count — how many
-  // accounts are registered platform-wide.
+  // accounts are registered platform-wide, AND the same figure broken down
+  // by countryIso (byCountry), which is what a country's own "Total users"
+  // on the Coverage screen should read from. Before this, no route on the
+  // client exposed the breakdown at all, so the per-country figure was
+  // quietly computed from this device's own Send Money history instead
+  // (see computeRealActiveUsers) — a brand-new registration in India never
+  // moved India's number, no matter how many people actually signed up.
   //
   // Returns null, never 0, when the answer can't be had: this route is
   // newer than the rest of the surface and is not deployed on every
@@ -341,36 +347,65 @@ var GloobalApi = {
   // locally in that case. Printing 0 for either would be inventing a
   // figure, which is the exact bug the invented 13,422,000 was.
   //
-  // Server side this is `User.countDocuments()`:
+  // Server side this is `User.countDocuments()` plus a `$group` on
+  // countryIso (see countUsersByCountry() in server.js):
   //   app.get('/api/profile/count', async (req, res) =>
-  //     res.json({ total: await User.countDocuments() }));
+  //     res.json({ total: await User.countDocuments(), byCountry }));
   // Both `total` and `totalUsers` are read because the route has been
-  // written both ways.
+  // written both ways. byCountry sums to exactly `total` by construction —
+  // same query, grouped — so the Gloobal-wide figure and every country's
+  // own figure can never drift apart.
   //
   // Two routes are tried because they are the same figure under two names and
   // neither is on every deploy: /api/stats is the newer one, /api/profile/count
   // the one that shipped first. The fallback runs ONLY on a 404 — "this server
   // does not have that route" — never on an unreachable or a 5xx, so a cold
   // start costs one 45s wait rather than two.
-  async getPlatformUserCount() {
-    const readCount = async (path) => {
+  async _fetchPlatformStats() {
+    const readStats = async (path) => {
       const result = await gloobalApiClient.get(path, {
         timeoutMs: GLOOBAL_API_COLD_START_TIMEOUT_MS
       });
       if (!result) return null;
       const total = Number(result.totalUsers ?? result.total ?? result.count);
-      return Number.isFinite(total) && total >= 0 ? total : null;
+      if (!Number.isFinite(total) || total < 0) return null;
+      const byCountry = {};
+      if (result.byCountry && typeof result.byCountry === "object") {
+        for (const [iso, count] of Object.entries(result.byCountry)) {
+          const n = Number(count);
+          if (iso && Number.isFinite(n) && n >= 0) byCountry[String(iso).toUpperCase()] = n;
+        }
+      }
+      return { total, byCountry };
     };
     try {
-      return await readCount("/api/stats");
+      const stats = await readStats("/api/stats");
+      if (stats) return stats;
     } catch (err) {
       if (!(err instanceof GloobalApiError && err.status === 404)) return null;
     }
     try {
-      return await readCount("/api/profile/count");
+      return await readStats("/api/profile/count");
     } catch (e) {
       return null;
     }
+  },
+
+  async getPlatformUserCount() {
+    const stats = await this._fetchPlatformStats();
+    return stats ? stats.total : null;
+  },
+
+  // iso is a Country.iso code (e.g. "IN"). Returns null when the platform
+  // total itself couldn't be fetched (server unreachable/cold), and 0 when
+  // the server answered but genuinely has nobody registered from that
+  // country yet — those are different facts and the caller (Coverage)
+  // treats them differently.
+  async getPlatformUserCountByCountry(iso) {
+    const stats = await this._fetchPlatformStats();
+    if (!stats) return null;
+    const code = String(iso || "").toUpperCase();
+    return stats.byCountry[code] ?? 0;
   },
 
   // --- Product catalogue -------------------------------------------------
