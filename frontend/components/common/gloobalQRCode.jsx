@@ -11,13 +11,15 @@ import { useState as useState3, useEffect as useEffect3, useMemo as useMemoQr } 
 // reads exactly as "dark" as the plain black square it replaces.
 var QR_MODULE_COLORS = ["#2563EB", "#DC2626", "#EA580C", "#059669", "#9333EA", "#DB2777"];
 
-// One shape per DIAL_SYMBOLS entry (constants/theme.js: − + × = ○ □ ● ■),
-// each drawn with enough ink coverage inside its module cell that a real
-// camera-based scanner reads it exactly the way it would read a plain
-// filled square — a decoder only ever asks "is this cell dark or light",
-// never what shape made it dark. Always returns one root element (a
-// single shape, or a <g> grouping two) so the caller can key it directly
-// like any other list item, the same as the plain <rect> it replaces.
+// One shape per DIAL_SYMBOLS entry (constants/theme.js: − + × = ○ □ ● ■)
+// — back to exactly the Secure ID dial pad's own 8-symbol alphabet, not
+// a wider invented set. Each is drawn with enough ink coverage inside
+// its module cell that a real camera-based scanner reads it exactly the
+// way it would read a plain filled square — a decoder only ever asks
+// "is this cell dark or light", never what shape made it dark. Always
+// returns one root element (a single shape, or a <g> grouping two) so
+// the caller can key it directly like any other list item, the same as
+// the plain <rect> it replaces.
 function QrSymbolGlyph({ index, rowKey, x, y, moduleSize, color }) {
   const cx = x + moduleSize / 2;
   const cy = y + moduleSize / 2;
@@ -72,28 +74,43 @@ function QrSymbolGlyph({ index, rowKey, x, y, moduleSize, color }) {
   }
 }
 
+// Still exactly the dial pad's 8 symbols (QrSymbolGlyph above), but not
+// every symbol paired with every one of the 6 brand colors — that full
+// 8x6 cross product is 48 distinct tiles, which is what actually made
+// the mosaic read as noisy/busy up close rather than the symbol count
+// itself. This table caps it at 18 curated (symbol, color) pairs instead.
+//
+// Built off the fact that 8 and 6 share only the factor 2 (their least
+// common multiple is 24): walking i from 0 to 17 with symbolIndex = i%8
+// and colorIndex = i%6 cannot repeat a pair before i reaches 24, so all
+// 18 entries here are guaranteed distinct without hand-picking them.
+// Every symbol appears at least twice (symbols 0 and 1 appear a third
+// time, since 18 does not divide evenly by 8) in a different color each
+// time, so the palette still varies without approaching the full 48.
+var QR_MODULE_COMBOS = Array.from({ length: 18 }, (_, i) => ({
+  symbolIndex: i % 8,
+  colorIndex: i % QR_MODULE_COLORS.length
+}));
+
 // Deterministic on purpose — no Math.random. The same (row, col) always
-// picks the same symbol and color, so the same encoded payload renders
+// picks the same combo, so the same encoded payload renders
 // pixel-identical every time it's shown: reopen the code, screenshot it
 // twice, scan it from a saved photo later — the mosaic never reshuffles
 // out from under a payment that's still the same payment.
 //
 // A plain arithmetic combine (row*A + col*B) was tried first and came out
-// badly skewed — one symbol landed on ~33% of cells, several others on
-// under 7% — because it preserves too much linear structure for `% 8` to
-// break up evenly. This is the standard 32-bit integer "lowbias" mix
+// badly skewed — one combo landed on ~33% of cells, several others on
+// under 7% — because it preserves too much linear structure for a modulo
+// to break up evenly. This is the standard 32-bit integer "lowbias" mix
 // (two multiply-xor-shift rounds) instead: not cryptographic, just
-// well-scrambled enough that every symbol and color lands within a few
-// percent of its fair share across the 33x33 grid.
+// well-scrambled enough that every combo lands within a few percent of
+// its fair share across the 33x33 grid.
 function qrModuleStyleFor(row, col) {
   let h = row * 37 + col;
   h = Math.imul(h ^ h >>> 16, 0x45d9f3b);
   h = Math.imul(h ^ h >>> 16, 0x45d9f3b);
   h = (h ^ h >>> 16) >>> 0;
-  return {
-    symbolIndex: h % 8,
-    colorIndex: Math.floor(h / 8) % QR_MODULE_COLORS.length
-  };
+  return QR_MODULE_COMBOS[h % QR_MODULE_COMBOS.length];
 }
 
 // The single place that decides plain-square vs branded-symbol per
@@ -170,11 +187,9 @@ function GloobalQRCode({ code, size = 200, onSecondsLeftChange }) {
   // was surfacing as a dev-mode "unique key prop" warning on every
   // render even though every actual module element was already keyed.
   const qrModules = built ? built.matrix.map((row, r) => row.map((v, c) => v === 1 ? renderQrModule(r, c, built.isFunctionModule[r][c], (c + margin) * moduleSize, (r + margin) * moduleSize, moduleSize) : null)).flat() : null;
-  return <div style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>{built ? <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Gloobal QR code"><rect width={size} height={size} fill="#fff" />{qrModules}<image
-    href={G_LOGO_DATA_URI}
-    x={size * 0.42}
-    y={size * 0.42}
-    width={size * 0.16}
-    height={size * 0.16}
-  /></svg> : null}</div>;
+  // No center logo anymore — it sat over live data modules purely as
+  // brand decoration, at some (small) cost to the error-correction
+  // budget for no functional reason. The dial-symbol mosaic above is
+  // now where the brand identity lives on this code instead.
+  return <div style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>{built ? <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Gloobal QR code"><rect width={size} height={size} fill="#fff" />{qrModules}</svg> : null}</div>;
 }

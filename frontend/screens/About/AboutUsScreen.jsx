@@ -24,7 +24,15 @@ function AboutUsScreen({ onBack, heroColor, onShowToast }) {
         Cashless · Taxless · Borderless · Limitless
       </div></div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "18px" }}><div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Our Mission</div><div style={{ fontSize: 12.5, color: T.inkFaint, marginTop: 6, lineHeight: 1.5 }}>
         We're building one Gloobal ID that moves money the way people actually move — across countries, currencies, and platforms — without the fees, forms, or borders getting in the way.
-      </div></div><div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 4, flexShrink: 0 }}><span
+      </div></div><div style={{ position: "relative", marginTop: 4, flexShrink: 0 }}>{
+    /* Bug fix: this label is meant to straddle the card's top border
+       (translateY(-50%) pulls it half outside the box), but the card used
+       to carry overflow: hidden itself, which clipped the label's upper
+       half the instant it poked out — visible as an unreadable sliver
+       instead of the "What We Offer" pill. overflow: hidden now lives on
+       an inner wrapper around just the rows, so it still clips the row
+       dividers to the rounded corners without touching the label. */
+  }<span
     style={{
       position: "absolute",
       top: 0,
@@ -37,12 +45,13 @@ function AboutUsScreen({ onBack, heroColor, onShowToast }) {
       fontWeight: 800,
       color: T.inkFaint,
       textTransform: "uppercase",
-      letterSpacing: 0.4
+      letterSpacing: 0.4,
+      zIndex: 1
     }}
-  >What We Offer</span>{OFFERS.map((item, i) => <div
+  >What We Offer</span><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{OFFERS.map((item, i) => <div
     key={item.label}
     style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
-  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span></div>)}</div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", flexShrink: 0 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span></div>{["Terms of Service", "Privacy Policy"].map((label) => <button
+  ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><item.icon size={17} color={T.accent} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span></div>)}</div></div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", flexShrink: 0 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}><span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span></div>{["Terms of Service", "Privacy Policy"].map((label) => <button
     key={label}
     onClick={() => onShowToast && onShowToast(`${label} coming soon`)}
     className="v2-row"

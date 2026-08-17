@@ -108,11 +108,40 @@ function GloobalCoverageScreen({ onClose, dialCountry, sendHistory: sendHistoryP
       cancelled = true;
     };
   }, []);
-  // Per country, the backend offers no breakdown, so a selected country
-  // stays on the locally-derived figure — this account counts for the
-  // country it has actually sent to, and nothing else.
+  // Per country, real and platform-wide — GET /api/stats' byCountry
+  // breakdown (see countUsersByCountry() in Backend/server.js), grouped on
+  // the same countryIso every account was registered with. Refetched
+  // whenever the flipped country changes.
+  //
+  // This used to have no backend source at all: a selected country fell
+  // back to a locally-derived figure (computeRealActiveUsers) that only
+  // ever asked "has THIS account sent money to that country" — so
+  // registering a brand-new account from India, or any other country,
+  // never moved that country's number, because no send-history entry
+  // exists for a fresh account. byCountry sums to exactly platformUserCount
+  // above by construction (same query, grouped), so the Gloobal-wide total
+  // and every country's own total can never drift apart.
+  const [platformCountryUserCount, setPlatformCountryUserCount] = useState16(null);
+  useEffect14(() => {
+    if (!flipped) return undefined;
+    let cancelled = false;
+    setPlatformCountryUserCount(null);
+    (async () => {
+      const count = await GloobalApi.getPlatformUserCountByCountry(country.code);
+      if (!cancelled) setPlatformCountryUserCount(count);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [flipped, country.code]);
+  // Local fallback only — used when the backend genuinely couldn't be
+  // reached (cold start, offline, older deploy without this route), same
+  // "something honest beats a fabricated 0" reasoning as platformUserCount
+  // above. Once the server answers, its real count always wins.
   const localUserCount = computeRealActiveUsers(sendHistory, flipped ? country.code : null, isFullyRegistered);
-  const displayUserCount = flipped ? localUserCount : platformUserCount != null ? platformUserCount : localUserCount;
+  const displayUserCount = flipped
+    ? platformCountryUserCount != null ? platformCountryUserCount : localUserCount
+    : platformUserCount != null ? platformUserCount : localUserCount;
   const [deltaColor, setDeltaColor] = useState16(() => randomLogoFlipColor());
   useEffect14(() => {
     const interval = setInterval(() => {

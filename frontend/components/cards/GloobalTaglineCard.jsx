@@ -91,7 +91,17 @@ var SERVICE_ROW_ICONS = {
 // product that isn't live. This renders what it is given and decides
 // nothing about truth.
 function ProductServicesCard({ services }) {
-  return <div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, flexShrink: 0 }}><span
+  // Bug fix: the "Our Services" label is meant to straddle the card's top
+  // border (position: absolute, translateY(-50%) pulls it half outside the
+  // box) — the same "fieldset legend" look every notch-labelled card here
+  // uses. The card itself used to carry `overflow: hidden` so the row
+  // dividers below wouldn't square off past the rounded corners, but that
+  // same overflow clipped the label's upper half the instant it tried to
+  // poke out above the border, leaving only a sliver of it visible. The fix
+  // moves overflow: hidden onto an inner wrapper around just the rows, so
+  // the label sits in an outer, unclipped box while the dividers still clip
+  // to the rounded corners as before.
+  return <div style={{ position: "relative", marginTop: 14, flexShrink: 0 }}><span
     style={{
       position: "absolute",
       top: 0,
@@ -104,16 +114,17 @@ function ProductServicesCard({ services }) {
       fontWeight: 800,
       color: T.inkFaint,
       textTransform: "uppercase",
-      letterSpacing: 0.4
+      letterSpacing: 0.4,
+      zIndex: 1
     }}
-  >Our Services</span>{(services || []).map((item, i) => {
+  >Our Services</span><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{(services || []).map((item, i) => {
     const Icon = SERVICE_ROW_ICONS[item.label] || ServiceShield;
     const live = item.status === "live";
     return <div
       key={item.label}
       style={{ display: "flex", alignItems: "center", gap: 14, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, marginTop: i === 0 ? 6 : 0 }}
     ><span style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: live ? T.accentSoft : T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon size={17} color={live ? T.accent : T.inkFaint} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 14, fontWeight: 700, color: live ? T.ink : T.inkSoft }}>{item.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{item.note}</span></span>{live ? <ServiceCheck size={17} color={T.positive} style={{ flexShrink: 0 }} /> : <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.inkFaint, background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 999, padding: "4px 9px" }}>Planned</span>}</div>;
-  })}</div>;
+  })}</div></div>;
 }
 
 // Header shared by Bank, Coin and About Us: back control, title, and an

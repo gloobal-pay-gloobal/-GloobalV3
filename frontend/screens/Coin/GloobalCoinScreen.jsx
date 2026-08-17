@@ -181,16 +181,20 @@ function GloobalCoinScreen({
       fontWeight: 800,
       boxShadow: T.shadowCard
     }}
-  >{Number(coinBalance) > 0 ? "Send Gloobal Coin" : "Buy coin to start sending"}</button><GloobalTaglineCard accentColor={heroColor} /><GloobalIamInButton
-    interested={interested}
-    busy={interestBusy}
-    onClick={onRegisterInterest}
-  /><ProductServicesCard services={services} />{
+  >{Number(coinBalance) > 0 ? "Send Gloobal Coin" : "Buy coin to start sending"}</button><ProductServicesCard services={services} />{
     /* Coin movements, read from the local ledger rather than from a
        separate history fetch — every one of them was posted there by the
        action that caused it, so this list cannot disagree with the
        balance above it. */
-  }<div style={{ position: "relative", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", marginTop: 14, padding: "6px 18px 12px", flexShrink: 0 }}><span
+  }<div style={{ position: "relative", marginTop: 14, flexShrink: 0 }}>{
+    /* Bug fix: "Coin Activity" straddles the card's top border the same
+       way every notch-labelled card here does (translateY(-50%) pulls it
+       half outside the box). The card used to set overflow: hidden on
+       itself, which clipped the label's upper half to an unreadable
+       sliver the moment it tried to poke out. overflow: hidden now lives
+       on an inner wrapper around just the rows, so the row dividers still
+       clip to the rounded corners and the label renders in full above it. */
+  }<span
     style={{
       position: "absolute",
       top: 0,
@@ -203,9 +207,10 @@ function GloobalCoinScreen({
       fontWeight: 800,
       color: T.inkFaint,
       textTransform: "uppercase",
-      letterSpacing: 0.4
+      letterSpacing: 0.4,
+      zIndex: 1
     }}
-  >Coin Activity</span>{!(coinHistory || []).length ? <div style={{ padding: "18px 0 8px", textAlign: "center", fontSize: 12, color: T.inkFaint, lineHeight: 1.5 }}>
+  >Coin Activity</span><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", padding: "6px 18px 12px" }}>{!(coinHistory || []).length ? <div style={{ padding: "18px 0 8px", textAlign: "center", fontSize: 12, color: T.inkFaint, lineHeight: 1.5 }}>
         No coin activity yet — buy your first Gloobal Coin above
       </div> : (coinHistory || []).map((row, i) => {
     const incoming = row.direction === "in";
@@ -215,5 +220,16 @@ function GloobalCoinScreen({
     ><span
       style={{ width: 30, height: 30, borderRadius: "50%", flexShrink: 0, background: incoming ? T.positiveSoft : T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}
     >{incoming ? <CoinArrowIn size={14} color={T.positive} /> : <CoinArrowOut size={14} color={T.accent} />}</span><span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 13, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.memo}</span><span style={{ display: "block", fontSize: 10.5, color: T.inkFaint, marginTop: 1 }}>{new Date(row.postedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></span><span style={{ fontSize: 13, fontWeight: 800, color: incoming ? T.positive : T.ink, flexShrink: 0 }}>{incoming ? "+" : "−"}{Number(row.amount).toFixed(2)} GC</span></div>;
-  })}</div></div></div>;
+  })}</div></div>{
+    /* Moved to the bottom of the screen at the user's request — the
+       tagline card and "I am IN" waitlist button used to sit between the
+       mint/redeem control and Our Services, ahead of the account's own
+       coin activity. They're marketing/waitlist elements rather than
+       account data, so the end of the screen — after everything about
+       the coin itself — is where they belong. */
+  }<GloobalTaglineCard accentColor={heroColor} /><GloobalIamInButton
+    interested={interested}
+    busy={interestBusy}
+    onClick={onRegisterInterest}
+  /></div></div>;
 }

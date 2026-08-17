@@ -10,10 +10,144 @@ import {
   History as History2,
   Fingerprint,
   ScanFace,
-  Car as Car2
+  Car as Car2,
+  Bell as Bell4,
+  MapPin as MapPin3,
+  Contact as Contact3,
+  Camera as Camera2,
+  Check as Check4
 } from "lucide-react";
 
 
+// The very first screen the app shows — before the phone number, before
+// register-or-login is even a choice — asking for the four device
+// permissions the rest of the app actually uses: Notifications (payment
+// and security alerts), Location (the same country/fraud check the
+// provenance layer already does server-side, now also confirmed
+// on-device), Contacts (SendMoney's contact picker), and Camera (QR scan
+// to pay/receive). Priming these upfront means the first time any of them
+// is actually needed — a scan, a payment alert — the browser prompt isn't
+// competing with whatever the person is in the middle of doing.
+//
+// Every one of these is skippable, individually and as a whole. Nothing
+// downstream is gated on any of them being granted: Continue always
+// works, and a feature whose permission was declined or is unavailable on
+// this device already has its own honest fallback where it's actually
+// used (SendMoney's contact button toasts instead of silently failing,
+// the same pattern here).
+//
+// Contacts has no persistent grant to request — the Contact Picker API
+// prompts fresh on every call, by design, so there is nothing to
+// pre-authorize here. Tapping Allow for it only confirms the API exists
+// on this device rather than pretending to obtain a permission that
+// isn't a real, standing one.
+function PermissionsGateScreen({ onContinue }) {
+  const PERMISSIONS = [
+    { key: "notifications", label: "Notifications", Icon: Bell4, note: "Payment alerts and security codes land the moment they happen" },
+    { key: "location", label: "Location", Icon: MapPin3, note: "Confirms which country you're transacting from, for fraud checks" },
+    { key: "contacts", label: "Contacts", Icon: Contact3, note: "Pick a recipient from your phone instead of typing their number" },
+    { key: "camera", label: "Camera", Icon: Camera2, note: "Scan a Gloobal QR code to pay or receive instantly" }
+  ];
+  const [status, setStatus] = useState6(() => Object.fromEntries(PERMISSIONS.map((p) => [p.key, "idle"])));
+  const [busyKey, setBusyKey] = useState6(null);
+
+  async function requestOne(key) {
+    if (busyKey) return;
+    setBusyKey(key);
+    try {
+      if (key === "notifications") {
+        if (typeof Notification === "undefined") {
+          setStatus((s) => ({ ...s, notifications: "unavailable" }));
+        } else {
+          try {
+            const result = await Notification.requestPermission();
+            setStatus((s) => ({ ...s, notifications: result === "granted" ? "granted" : "denied" }));
+          } catch (e) {
+            setStatus((s) => ({ ...s, notifications: "denied" }));
+          }
+        }
+      } else if (key === "location") {
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+          setStatus((s) => ({ ...s, location: "unavailable" }));
+        } else {
+          await new Promise((resolve) => {
+            navigator.geolocation.getCurrentPosition(
+              () => {
+                setStatus((s) => ({ ...s, location: "granted" }));
+                resolve();
+              },
+              () => {
+                setStatus((s) => ({ ...s, location: "denied" }));
+                resolve();
+              },
+              { timeout: 8000 }
+            );
+          });
+        }
+      } else if (key === "contacts") {
+        const supported = typeof navigator !== "undefined" && "contacts" in navigator && typeof window !== "undefined" && "ContactsManager" in window;
+        setStatus((s) => ({ ...s, contacts: supported ? "granted" : "unavailable" }));
+      } else if (key === "camera") {
+        if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setStatus((s) => ({ ...s, camera: "unavailable" }));
+        } else {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            // Only the permission grant was wanted — an idle camera stream
+            // left open would show the browser's "camera in use" indicator
+            // for a screen that isn't showing any camera feed.
+            stream.getTracks().forEach((t) => t.stop());
+            setStatus((s) => ({ ...s, camera: "granted" }));
+          } catch (e) {
+            setStatus((s) => ({ ...s, camera: "denied" }));
+          }
+        }
+      }
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  return <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 50,
+      background: T.bg,
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: T.fontBody
+    }}
+  ><div
+    style={{
+      flex: 1,
+      minHeight: 0,
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "calc(48px + env(safe-area-inset-top, 0px)) 24px 24px",
+      display: "flex",
+      flexDirection: "column",
+      gap: 22
+    }}
+  ><div style={{ textAlign: "center" }}><span style={{ fontSize: 19, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}><GloobalWordmark suffix=" needs a few things" /></span><div style={{ fontSize: 12.5, color: T.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
+        Turn these on now so payments, scans and alerts work the moment you need them. Nothing here is required — skip anything and turn it on later from your device settings.
+      </div></div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>{PERMISSIONS.map((p, i) => {
+    const st = status[p.key];
+    return <div
+      key={p.key}
+      style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+    ><span style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><p.Icon size={18} color={T.accent} /></span><span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>{p.label}</span><span style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.35 }}>{p.note}</span></span>{st === "granted" ? <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 11, fontWeight: 800, color: T.positive }}><Check4 size={15} color={T.positive} /> Allowed</span> : st === "denied" ? <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.negative, background: T.negativeSoft, borderRadius: 999, padding: "4px 9px" }}>Blocked</span> : st === "unavailable" ? <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase", color: T.inkFaint, background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: 999, padding: "4px 9px" }}>Not on this device</span> : <button
+      onClick={() => requestOne(p.key)}
+      disabled={busyKey === p.key}
+      className="v2-tap"
+      style={{ flexShrink: 0, border: `1px solid ${T.accent}`, borderRadius: 999, padding: "7px 14px", background: "none", color: T.accent, fontSize: 11.5, fontWeight: 800, cursor: busyKey === p.key ? "default" : "pointer" }}
+    >{busyKey === p.key ? "Asking…" : "Allow"}</button>}</div>;
+  })}</div></div><div style={{ padding: "0 24px calc(24px + env(safe-area-inset-bottom, 0px))", flexShrink: 0 }}><button
+    onClick={onContinue}
+    className="v2-tap"
+    style={{ width: "100%", border: "none", borderRadius: T.radiusMd, padding: "16px 0", cursor: "pointer", background: T.gradButton, color: "#fff", fontSize: 14, fontWeight: 800, boxShadow: "0 10px 24px rgba(124,58,237,0.3)" }}
+  >Continue</button></div></div>;
+}
 // src/components/dialogs/registerLogin.jsx
 function PhoneConnector({ country, phoneNumber, onOpenPicker, onOpenDial, dialOpen, onActivate, verifying, showLogin, onLoginTap }) {
   const digits = phoneNumber.replace(/\D/g, "");

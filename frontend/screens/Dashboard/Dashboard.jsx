@@ -655,7 +655,18 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   const activeCreatorId = creatorIdOverride || creatorId;
   const shareableGloobalId = shareRole === "merchant" ? activeCreatorId : personalGloobalId;
   const gloobalIdTag = shareableGloobalId;
-  const referralLink = `https://gloobal.id/r/${shareableGloobalId}`;
+  // Bug fix: this used to point at https://gloobal.id/r/... — a domain
+  // that was never wired up to anything (not this app, not the backend,
+  // not a redirect). Every referral link anyone shared was dead on
+  // arrival. The real /r/:symbolId route lives on the backend itself
+  // (server.js), which resolves the ID and redirects the visitor on to
+  // the actual live frontend with ?ref=<id> attached — so the link needs
+  // to point at GLOOBAL_API_BASE (the same backend origin every other
+  // API call in this app already uses), not an unregistered domain.
+  // encodeURIComponent matters here specifically because a Gloobal ID is
+  // built from symbols (− + × = ○ ● □ ■), and an unencoded "+" in a URL
+  // is interpreted as a space by the time anything downstream reads it.
+  const referralLink = `${GLOOBAL_API_BASE}/r/${encodeURIComponent(shareableGloobalId)}`;
   // The rate this account actually offers, read back from the server.
   //
   // Without this the sheet opened at its hardcoded 1% every time, so someone
@@ -1427,6 +1438,23 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       padding: 26,
       display: "flex",
       flexDirection: "column",
+      // Bug fix: the GH Score circle and the name badge are both
+      // absolutely positioned on top of this card (see their own
+      // comments below — each already got a one-off patch for
+      // overlapping the ID row: a maxWidth calc on the badge, a
+      // paddingRight reserve on the ID row). Patching each collision as
+      // it turned up never closed the actual gap — this card had no
+      // fixed proportions, so its real height came from whatever the ID
+      // row's flow content needed, with no guaranteed room for the
+      // decorations floating on top of it. A real debit card doesn't
+      // have that problem because it has a fixed shape: this card now
+      // does too, at the standard ID-1 card ratio (85.60 x 53.98mm),
+      // and the one real content row is pinned to the card's bottom
+      // edge (justifyContent: flex-end) so it's laid out in the space
+      // that's actually clear under the circle, not fighting it for the
+      // same rows.
+      aspectRatio: "1.586 / 1",
+      justifyContent: "flex-end",
       gap: 28,
       position: "relative"
     }}
@@ -2090,7 +2118,20 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
     }}
     aria-label="Copy Gloobal ID"
     style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}
-  ><Copy2 size={15} color={T.accent} /></button></div></div></div>}{
+  ><Copy2 size={15} color={T.accent} /></button></div>{
+    /* Recent — the last five payments actually received on this
+       Gloobal ID, right on the Receive sheet itself rather than only
+       reachable through the header's history icon. Same source
+       (receivedRows) and cap (5) as the Home tab's own receiving list
+       above, already newest-first (see receivedRows' own comment). */
+  }{receivedRows.length > 0 && <div style={{ marginTop: 18 }}><div style={{ fontSize: 11, fontWeight: 800, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.4, margin: "0 0 10px 2px" }}>
+              Recent
+            </div><div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden", padding: "6px 16px 10px" }}>{receivedRows.slice(0, 5).map((t, i) => <div
+    key={t.txnId || `${t.name}-${t.date}-${i}`}
+    style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 0", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+  ><span style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, background: T.positiveSoft, display: "flex", alignItems: "center", justifyContent: "center" }}><ArrowDownLeft2 size={13} color={T.positive} /></span><span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 13, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span><span style={{ display: "block", fontSize: 10.5, color: T.inkFaint, marginTop: 1 }}>{t.date}</span></span><span style={{ fontSize: 13, fontWeight: 800, color: T.positive, flexShrink: 0 }}>
+                    +{ccy}{Number(t.amount || 0).toFixed(2)}
+                  </span></div>)}</div></div>}</div></div>}{
     /* My Share — the % of every incoming payment this person shares
        back with whoever paid them. Opened from the Receive sheet's
        pill button. Slider and the custom-% input stay in sync (both

@@ -20,7 +20,8 @@ import {
   ChevronRight as ChevronRight4,
   Landmark as Landmark6,
   History as History6,
-  RefreshCw as RefreshCw4
+  RefreshCw as RefreshCw4,
+  Contact as ContactIcon
 } from "lucide-react";
 
 
@@ -65,6 +66,28 @@ function toCountryLike(senderProfile) {
     dialCode: senderProfile.dialCode,
     flag: senderProfile.flag
   };
+}
+// A number picked from the device's own contacts arrives as whatever the
+// person typed when they saved it — "+91 98765 43210", "0044 7911
+//123456", or just seven local digits with no country info at all. The
+// mobile search field needs a country (for the dial-code tag and the
+// digit-length check) plus the bare digits, so this makes a best-effort
+// split: the longest dial code in ALL_COUNTRIES that prefixes the
+// number wins, on the theory that "+1" and "+44" can both prefix-match
+// a number but only one is actually that number's country. A number
+// with no leading "+" has no country signal in it at all — it's handed
+// back as-is and the search keeps whatever country was already selected,
+// same as someone typing local digits by hand.
+function matchCountryFromContactNumber(rawNumber) {
+  const cleaned = String(rawNumber || "").replace(/[^\d+]/g, "");
+  if (!cleaned.startsWith("+")) return { country: null, digits: cleaned };
+  let best = null;
+  for (const c of ALL_COUNTRIES) {
+    if (cleaned.startsWith(c.dialCode) && (!best || c.dialCode.length > best.dialCode.length)) {
+      best = c;
+    }
+  }
+  return best ? { country: best, digits: cleaned.slice(best.dialCode.length) } : { country: null, digits: cleaned.slice(1) };
 }
 var ID_SEARCH_LENGTH = 12;
 function identityDisplayValue(profile, mode) {
@@ -141,6 +164,24 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     () => convert(amount, bottom.currency, top.currency),
     [amount, top.currency, bottom.currency]
   );
+  // The last five payments sent from this screen — `history` (the
+  // sendMoneyHistory App.jsx passes in) has always reached this
+  // component, but nothing here ever rendered it: the History icon in
+  // the header opens a separate full history screen instead, so anyone
+  // mid-dial had no way to see who they'd recently paid without leaving
+  // this screen entirely. Same "last five" figure and the same
+  // out-of-order guard as GloobalBankScreen's recentBankTransactions —
+  // rows seeded from the server (see App.jsx's seedUnder) land appended
+  // under whatever this session already has, not necessarily
+  // newest-first overall, so this sorts by the parsed date rather than
+  // trusting array order.
+  const recentSentTransactions = useMemo6(() => {
+    const stamp = (row) => {
+      const parsed = parseDemoDate(row.date);
+      return isNaN(parsed.getTime()) ? -Infinity : parsed.getTime();
+    };
+    return [...history].sort((a, b) => stamp(b) - stamp(a)).slice(0, 5);
+  }, [history]);
   // A recipient handed in from outside — currently the Scan screen, after it
   // has decoded a Gloobal QR and resolved the ID against
   // GET /api/users/resolve. It has already done the lookup this screen's own
@@ -452,6 +493,54 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
       setFoundDisplayMode("name");
       setBottom(buildLocalReceiverPlaceholder(top));
     }
+  }
+  // Lets someone pick a recipient's number out of their own phone contacts
+  // instead of dialling it in by hand. This is the real Contact Picker API
+  // (navigator.contacts.select) — there is no bundled contacts list of any
+  // kind to fake it with, and there shouldn't be one: reading someone's
+  // address book is exactly the kind of access that has to go through the
+  // browser's own permission prompt, not an app-level shortcut around it.
+  //
+  // Support is real but narrow — Chrome/Edge on Android behind HTTPS, as
+  // of when this was written. Desktop Chrome, Firefox and Safari (desktop
+  // and iOS) have no implementation at all. That's stated plainly rather
+  // than papered over: the button still works everywhere by falling back
+  // to a toast instead of silently doing nothing, and manual dial entry
+  // next to it is never blocked on this succeeding.
+  async function openContactPicker() {
+    const supported = typeof navigator !== "undefined" && "contacts" in navigator && typeof window !== "undefined" && "ContactsManager" in window;
+    if (!supported) {
+      showToast2("Contacts aren't available on this browser — dial the number in instead");
+      return;
+    }
+    let picked;
+    try {
+      picked = await navigator.contacts.select(["name", "tel"], { multiple: false });
+    } catch (e) {
+      // Permission denied, or the picker itself failed. Either way there's
+      // nothing to recover into — the manual dial pad still works.
+      showToast2("Couldn't open contacts");
+      return;
+    }
+    const contact = picked && picked[0];
+    const tel = contact && contact.tel && contact.tel[0];
+    if (!tel) {
+      // An empty array means the person cancelled the picker — leaving
+      // silently is correct there, same as backing out of any other
+      // sheet. A contact with no saved number is a different case and
+      // gets told apart from a plain cancel.
+      if (contact) showToast2("That contact has no phone number saved");
+      return;
+    }
+    const { country, digits } = matchCountryFromContactNumber(tel);
+    openSearch();
+    setSearchMode("mobile");
+    setSearchError(null);
+    if (country) {
+      setSearchCountry(country);
+      setBottom((b) => ({ ...b, country: country.name, flag: country.flag }));
+    }
+    setMobileBuffer(digits.replace(/\D/g, "").slice(0, maxMobileDigits));
   }
   function toggleSearchMode(e) {
     e.stopPropagation();
@@ -910,7 +999,7 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
        cards together through name → Gloobal ID → mobile number →
        country name. Replaces the old per-card flip button that used
        to sit on the found receiver card's own corner. */
-  }<div className="header"><button className="icon-btn circle" onClick={onClose} aria-label="Back"><ChevronLeft2 size={20} /></button><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn circle" onClick={onOpenPaidHistory} aria-label="Paid history"><History6 size={15} color={T.inkSoft} /></button></div></div>{searchStage !== "closed" && <>{bottomOpen && <>{
+  }<div className="header"><button className="icon-btn circle" onClick={onClose} aria-label="Back"><ChevronLeft2 size={20} /></button><div style={{ display: "flex", alignItems: "center", gap: 10 }}><button className="icon-btn circle" onClick={openContactPicker} aria-label="Choose from contacts"><ContactIcon size={15} color={T.inkSoft} /></button><button className="icon-btn circle" onClick={onOpenPaidHistory} aria-label="Paid history"><History6 size={15} color={T.inkSoft} /></button></div></div>{searchStage !== "closed" && <>{bottomOpen && <>{
     /* RECEIVER CARD — now shown first/up top: their name/ID and
        the editable amount (in their currency) are what matters
        while searching and typing. Hosts the active search dial
@@ -1056,7 +1145,22 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     onClick={resolveSearch}
     disabled={searchBusy || (searchMode === "id" ? idBuffer.length < ID_SEARCH_LENGTH : mobileBuffer.length < minMobileDigits)}
     label={searchBusy ? "Checking…" : "Search"}
-  /></div>}{searchStage === "found" && bottomOpen && <>{bottom.registered === false && <div
+  /></div>}{
+    /* Recent — the last five payments sent from this account, shown
+       only while still choosing who to pay (searchStage "dialing"):
+       once a receiver's found the screen is about THAT payment, not a
+       browsing list. Read-only on purpose — this states what already
+       happened rather than offering a shortcut to repeat it, since a
+       repeat-send would need the receiver's live currency/registration
+       state this snapshot doesn't carry. */
+  }{searchStage === "dialing" && recentSentTransactions.length > 0 && <div style={{ marginTop: 20 }}><div style={{ fontSize: 12, fontWeight: 800, color: "#8B899E", textTransform: "uppercase", letterSpacing: 0.4, margin: "0 0 10px 4px" }}>
+              Recent
+            </div><div className="card" style={{ padding: "6px 18px 10px" }}>{recentSentTransactions.map((t, i) => <div
+    key={t.txnId || `${t.name}-${t.date}-${i}`}
+    style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderTop: i === 0 ? "none" : "1px solid #EFEFF5" }}
+  ><Flag emoji={t.flag} size="sm" /><span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#14122B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span><span style={{ display: "block", fontSize: 10.5, color: "#9C96AF", marginTop: 1 }}>{t.date}</span></span><span style={{ fontSize: 13, fontWeight: 800, color: "#14122B", flexShrink: 0 }}>
+                    −{CURRENCY_SYMBOL[top.currency] || ""}{fmt(Number(t.amount) || 0)}
+                  </span></div>)}</div></div>}{searchStage === "found" && bottomOpen && <>{bottom.registered === false && <div
     role="alert"
     style={{
       display: "flex",
