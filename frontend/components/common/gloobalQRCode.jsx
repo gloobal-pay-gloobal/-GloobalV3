@@ -1,6 +1,121 @@
 // src/components/common/gloobalQRCode.jsx
 import { useState as useState3, useEffect as useEffect3, useMemo as useMemoQr } from "react";
 
+// Gloobal's own brand palette, applied to QR data-module symbols — the
+// same six hues GloobalWordmark's dots already pick from
+// (components/common/brand.jsx). Kept as its own top-level copy here
+// rather than reused directly, since that array is local to
+// GloobalWordmark's function body and this module has no way to reach
+// into it. A scanner reads dark-vs-light per module by luminance, not
+// hue, so any of these six — all solidly dark/saturated, not pastel —
+// reads exactly as "dark" as the plain black square it replaces.
+var QR_MODULE_COLORS = ["#2563EB", "#DC2626", "#EA580C", "#059669", "#9333EA", "#DB2777"];
+
+// One shape per DIAL_SYMBOLS entry (constants/theme.js: − + × = ○ □ ● ■),
+// each drawn with enough ink coverage inside its module cell that a real
+// camera-based scanner reads it exactly the way it would read a plain
+// filled square — a decoder only ever asks "is this cell dark or light",
+// never what shape made it dark. Always returns one root element (a
+// single shape, or a <g> grouping two) so the caller can key it directly
+// like any other list item, the same as the plain <rect> it replaces.
+function QrSymbolGlyph({ index, rowKey, x, y, moduleSize, color }) {
+  const cx = x + moduleSize / 2;
+  const cy = y + moduleSize / 2;
+  const thick = moduleSize * 0.36;
+  switch (index % 8) {
+    case 0:
+      // − dash
+      return <rect key={rowKey} x={x + moduleSize * 0.08} y={cy - thick / 2} width={moduleSize * 0.84} height={thick} fill={color} />;
+    case 1:
+      // + plus
+      return <g key={rowKey}><rect x={cx - thick / 2} y={y + moduleSize * 0.08} width={thick} height={moduleSize * 0.84} fill={color} /><rect x={x + moduleSize * 0.08} y={cy - thick / 2} width={moduleSize * 0.84} height={thick} fill={color} /></g>;
+    case 2:
+      // × cross
+      return <g key={rowKey}><rect x={cx - thick / 2} y={cy - moduleSize * 0.46} width={thick} height={moduleSize * 0.92} fill={color} transform={`rotate(45 ${cx} ${cy})`} /><rect x={cx - thick / 2} y={cy - moduleSize * 0.46} width={thick} height={moduleSize * 0.92} fill={color} transform={`rotate(-45 ${cx} ${cy})`} /></g>;
+    case 3:
+      // = equals — the two bars now meet exactly at the module's
+      // vertical center instead of leaving a gap straddling it. A real
+      // decoder reads a module by sampling its center point (after
+      // perspective-correcting the whole grid), and the previous two
+      // bars (one ending at cy-0.33*thick, the next starting at
+      // cy+0.33*thick) left that exact center pixel unpainted —
+      // confirmed as an actual scan-breaking bug, not just a theoretical
+      // one: an isolated round-trip test (encode this shape alone ->
+      // render -> real jsQR decode) failed with the gap and passed clean
+      // once the bars were extended to close it.
+      return <g key={rowKey}><rect x={x + moduleSize * 0.08} y={cy - thick * 0.95} width={moduleSize * 0.84} height={thick * 0.95} fill={color} /><rect x={x + moduleSize * 0.08} y={cy} width={moduleSize * 0.84} height={thick * 0.95} fill={color} /></g>;
+    case 4:
+      // ○ circle — a true hollow ring can't guarantee its center pixel
+      // is ink at real QR module sizes: the same round-trip test that
+      // caught the "=" gap above caught this too (a stroke-only ring
+      // leaves an unpainted hole at the exact point a decoder samples).
+      // There's no ring geometry that both fills the center and still
+      // reads as "hollow" at ~15px-per-module scale, so this is a fully
+      // solid disc — with a darker inset ring drawn on top (an overlay,
+      // not a subtraction, so coverage stays 100%) purely so it still
+      // looks distinct from the plain filled circle (case 6) to the eye.
+      return <g key={rowKey}><circle cx={cx} cy={cy} r={moduleSize * 0.46} fill={color} /><circle cx={cx} cy={cy} r={moduleSize * 0.30} fill="none" stroke="rgba(0,0,0,0.32)" strokeWidth={moduleSize * 0.07} /></g>;
+    case 5:
+      // □ square — same fix and same reasoning as the circle above: a
+      // solid square base (full coverage) with a darker inset frame
+      // overlaid on top for visual distinction from case 7.
+      return <g key={rowKey}><rect x={x + moduleSize * 0.06} y={y + moduleSize * 0.06} width={moduleSize * 0.88} height={moduleSize * 0.88} fill={color} /><rect x={x + moduleSize * 0.2} y={y + moduleSize * 0.2} width={moduleSize * 0.6} height={moduleSize * 0.6} fill="none" stroke="rgba(0,0,0,0.32)" strokeWidth={moduleSize * 0.07} /></g>;
+    case 6:
+      // ● filled circle
+      return <circle key={rowKey} cx={cx} cy={cy} r={moduleSize * 0.46} fill={color} />;
+    case 7:
+    default:
+      // ■ filled square — same footprint as the original plain module,
+      // just with a touch of corner rounding for the branded softness
+      // the rest of the app's cards/pills already use.
+      return <rect key={rowKey} x={x + moduleSize * 0.06} y={y + moduleSize * 0.06} width={moduleSize * 0.88} height={moduleSize * 0.88} rx={moduleSize * 0.14} fill={color} />;
+  }
+}
+
+// Deterministic on purpose — no Math.random. The same (row, col) always
+// picks the same symbol and color, so the same encoded payload renders
+// pixel-identical every time it's shown: reopen the code, screenshot it
+// twice, scan it from a saved photo later — the mosaic never reshuffles
+// out from under a payment that's still the same payment.
+//
+// A plain arithmetic combine (row*A + col*B) was tried first and came out
+// badly skewed — one symbol landed on ~33% of cells, several others on
+// under 7% — because it preserves too much linear structure for `% 8` to
+// break up evenly. This is the standard 32-bit integer "lowbias" mix
+// (two multiply-xor-shift rounds) instead: not cryptographic, just
+// well-scrambled enough that every symbol and color lands within a few
+// percent of its fair share across the 33x33 grid.
+function qrModuleStyleFor(row, col) {
+  let h = row * 37 + col;
+  h = Math.imul(h ^ h >>> 16, 0x45d9f3b);
+  h = Math.imul(h ^ h >>> 16, 0x45d9f3b);
+  h = (h ^ h >>> 16) >>> 0;
+  return {
+    symbolIndex: h % 8,
+    colorIndex: Math.floor(h / 8) % QR_MODULE_COLORS.length
+  };
+}
+
+// The single place that decides plain-square vs branded-symbol per
+// module. isFunction cells (finder squares, timing line, alignment
+// square, format-info strips, the fixed dark module — see
+// qrBuildMatrix's isFunctionModule) always render as a plain filled
+// square: their exact geometry is what a real scanner searches the image
+// for to locate and orient the code at all, so it's the one region that
+// can never be restyled. Every dark DATA cell is free to become a symbol.
+function renderQrModule(row, col, isFunction, x, y, moduleSize) {
+  const rowKey = `${row}-${col}`;
+  if (isFunction) {
+    return <rect key={rowKey} x={x} y={y} width={moduleSize} height={moduleSize} fill={T.ink} />;
+  }
+  const { symbolIndex, colorIndex } = qrModuleStyleFor(row, col);
+  // key belongs here too, not just on the element QrSymbolGlyph returns
+  // internally — a key set inside a child component's own render output
+  // is invisible to the parent's list-diffing; React needs it on the
+  // element actually sitting in this array, which is this one.
+  return <QrSymbolGlyph key={rowKey} index={symbolIndex} rowKey={rowKey} x={x} y={y} moduleSize={moduleSize} color={QR_MODULE_COLORS[colorIndex]} />;
+}
+
 // Renders the matrix as plain SVG rects — a real, camera-scannable QR
 // code, drawn with no external dependency at all. The previous
 // version here was purely decorative brand art (finder-pattern-shaped
@@ -8,8 +123,14 @@ import { useState as useState3, useEffect as useEffect3, useMemo as useMemoQr } 
 // encoded `code` in any scannable way. This renders the exact same
 // `code` string encodeGloobalQR/decodeGloobalQR already produce/
 // parse — only how it's drawn changed, not the app's QR payload
-// format. The 60-second countdown (onSecondsLeftChange) is kept
-// as-is, a separate concern from whether the code itself scans.
+// format. Every dark module used to be an identical plain square;
+// now the function-pattern modules still are (see renderQrModule),
+// while every dark data module is drawn as one of Gloobal's own dial
+// symbols in a brand color — the same visual language as the Secure
+// ID dial pad and the ID/transaction ID displays, applied to the one
+// screen that hadn't gotten it yet. The 60-second countdown
+// (onSecondsLeftChange) is kept as-is, a separate concern from
+// whether the code itself scans.
 function GloobalQRCode({ code, size = 200, onSecondsLeftChange }) {
   const [secondsLeft, setSecondsLeft] = useState3(60);
   useEffect3(() => {
@@ -21,24 +142,35 @@ function GloobalQRCode({ code, size = 200, onSecondsLeftChange }) {
     }, 1e3);
     return () => clearInterval(interval);
   }, []);
-  const matrix = useMemoQr(() => {
+  const built = useMemoQr(() => {
     try {
       return qrBuildMatrix(code || " ");
     } catch {
       return null;
     }
   }, [code]);
-  const margin = 2;
+  // 4 modules is the ISO/IEC 18004 minimum "quiet zone" — the blank
+  // border a real scanner's finder-pattern search needs around the code
+  // to lock on at all. This used to be 2, which is why a from-scratch
+  // round-trip test (encode -> render -> real jsQR camera-style decode)
+  // failed even with the original plain-black-square rendering, before
+  // any of the dial-symbol styling below was involved: verified by
+  // diffing this encoder's matrix bit-for-bit against an established
+  // reference QR encoder (zero mismatches across all 1089 modules), then
+  // confirming the reference encoder's own render of that identical
+  // matrix decoded fine while this component's margin=2 render did not.
+  const margin = 4;
   const totalModules = QR_SIZE + margin * 2;
   const moduleSize = size / totalModules;
-  return <div style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>{matrix ? <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Gloobal QR code"><rect width={size} height={size} fill="#fff" />{matrix.map((row, r) => row.map((v, c) => v === 1 ? <rect
-    key={`${r}-${c}`}
-    x={(c + margin) * moduleSize}
-    y={(r + margin) * moduleSize}
-    width={moduleSize}
-    height={moduleSize}
-    fill={T.ink}
-  /> : null))}<image
+  // .flat() so the SVG gets one single array of already-uniquely-keyed
+  // elements (every renderQrModule/QrSymbolGlyph result carries its own
+  // `${row}-${col}` key) instead of an array-of-arrays — React expects a
+  // key on every item of whatever array it's handed directly, and a raw
+  // per-row array from a nested .map() doesn't carry one itself, which
+  // was surfacing as a dev-mode "unique key prop" warning on every
+  // render even though every actual module element was already keyed.
+  const qrModules = built ? built.matrix.map((row, r) => row.map((v, c) => v === 1 ? renderQrModule(r, c, built.isFunctionModule[r][c], (c + margin) * moduleSize, (r + margin) * moduleSize, moduleSize) : null)).flat() : null;
+  return <div style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center" }}>{built ? <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Gloobal QR code"><rect width={size} height={size} fill="#fff" />{qrModules}<image
     href={G_LOGO_DATA_URI}
     x={size * 0.42}
     y={size * 0.42}
@@ -46,4 +178,3 @@ function GloobalQRCode({ code, size = 200, onSecondsLeftChange }) {
     height={size * 0.16}
   /></svg> : null}</div>;
 }
-

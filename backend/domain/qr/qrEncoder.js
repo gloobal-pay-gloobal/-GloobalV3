@@ -205,6 +205,16 @@ function qrPlaceData(matrix, isFn, codewords) {
     col -= 2;
   }
 }
+// Returns both the module matrix AND isFunctionModule, the same "is this
+// cell a finder/timing/alignment/format-info/dark-module cell, or real
+// data" map this function already builds internally as `isFn` — it just
+// never left the function before. A renderer needs that distinction to
+// stay camera-scannable while still restyling anything it safely can:
+// function-pattern cells must stay plain, standard-shaped modules for a
+// real scanner to lock onto the code at all (the finder squares' geometry
+// specifically is what a decoder searches the image for), but every dark
+// DATA cell can be drawn as anything with equivalent ink coverage — a
+// scanner only reads dark-vs-light per cell, never what shape made it dark.
 function qrBuildMatrix(text) {
   const matrix = qrMakeMatrix();
   const isFn = Array.from({ length: QR_SIZE }, () => new Array(QR_SIZE).fill(false));
@@ -218,6 +228,6 @@ function qrBuildMatrix(text) {
   const finalCodewords = qrBuildFinalCodewords(qrBuildDataCodewords(text));
   qrPlaceData(matrix, isFn, finalCodewords);
   qrPlaceFormatInfo(matrix, isFn, "M", 0);
-  return matrix;
+  return { matrix, isFunctionModule: isFn };
 }
 

@@ -161,7 +161,15 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
       phone: maskMobileNumber(prefillReceiver.mobileNumber),
       currency: prefillReceiver.currency || top.currency,
       // Already a percent by the time it arrives (see handleSendToScanned).
-      shareRate: Number(prefillReceiver.shareRate) || 0
+      shareRate: Number(prefillReceiver.shareRate) || 0,
+      // Defaults true (undefined !== false) because every receiver this
+      // screen's OWN search resolves is already real — resolveSearch only
+      // reaches setSearchStage("found") after GloobalApi.resolveUser
+      // succeeds. Only a handed-in prefill can carry an explicit false,
+      // the same "unregistered" fact Scan's own confirmation card shows —
+      // now it survives the handoff instead of Send Money treating a
+      // scanned placeholder identically to a resolved account.
+      registered: prefillReceiver.registered !== false
     });
     setSearchStage("found");
     setFoundDisplayMode("name");
@@ -206,6 +214,14 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     let confirmedTxnId = txnId;
     let confirmedShareRatePercent = (bottom.shareRate ?? 0);
     let confirmedCashback = null;
+    // Whether the backend actually recorded this payment — false for a
+    // `skipped` local simulation, and (consistently) false when there is
+    // no onRemoteSend at all to have recorded it. Read below by the final
+    // toast, the receipt, and the history row, so none of the three can
+    // describe a payment that never reached MongoDB as a normal, completed
+    // send — the exact gap that let Send Money show a real-looking
+    // success for money that never moved.
+    let settledRemotely = false;
     if (onRemoteSend) {
       const remote = await onRemoteSend({
         txnId,
@@ -229,7 +245,8 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
       }
       // A `skipped` send never reached the backend, so it has nothing to
       // confirm and the locally-minted values stand.
-      if (remote && remote.ok && !remote.skipped) {
+      settledRemotely = Boolean(remote && remote.ok && !remote.skipped);
+      if (settledRemotely) {
         // Normally the same value this device sent; different only if the
         // backend had to mint its own (see resolveTransactionReference).
         if (remote.transactionId) confirmedTxnId = remote.transactionId;
@@ -269,9 +286,13 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
       return;
     }
     showToast2(
-      `Sending ${CURRENCIES[top.currency].label} ${fmt(
-        convertedAmount
-      )} to ${bottom.country} \xB7 via ${payMethod || "Gloobal Bank"}`
+      settledRemotely
+        ? `Sending ${CURRENCIES[top.currency].label} ${fmt(
+            convertedAmount
+          )} to ${bottom.country} \xB7 via ${payMethod || "Gloobal Bank"}`
+        : `Not sent — ${CURRENCIES[top.currency].label} ${fmt(
+            convertedAmount
+          )} recorded locally only, no registered Gloobal account to credit`
     );
     const { receipt: receipt2, historyEntry } = buildTransactionSnapshot({
       sender: top,
@@ -286,11 +307,24 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     });
     // Held no longer than the send it authorised.
     verifiedPinRef.current = null;
+    // Overridden after buildTransactionSnapshot, the same way confirmedCashback
+    // already is below — a `status: "simulated"` row must never collapse back
+    // to whatever default buildTransactionSnapshot assigns (History and the
+    // reopened receipt both read this field, and both need to keep saying
+    // "simulated" the next time this payment is looked at, not just in the
+    // first toast).
+    const receiptOverrides = Object.assign(
+      {},
+      confirmedCashback === null ? null : { cashback: confirmedCashback },
+      settledRemotely ? null : { status: "simulated" }
+    );
+    const finalReceipt = Object.keys(receiptOverrides).length ? Object.assign({}, receipt2, receiptOverrides) : receipt2;
+    const finalHistoryEntry = settledRemotely ? historyEntry : Object.assign({}, historyEntry, { status: "simulated" });
     // The receipt is set before the status flips, so "completed" is never
     // observable without one to show for it.
-    setReceipt(confirmedCashback === null ? receipt2 : Object.assign({}, receipt2, { cashback: confirmedCashback }));
+    setReceipt(finalReceipt);
     setTransactionStatus("completed");
-    if (onSendComplete) onSendComplete(historyEntry);
+    if (onSendComplete) onSendComplete(finalHistoryEntry);
   }
   const [showPayBiometric, setShowPayBiometric] = useState15(false);
   const [payBiometricScanning, setPayBiometricScanning] = useState15(false);
@@ -1022,7 +1056,23 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     onClick={resolveSearch}
     disabled={searchBusy || (searchMode === "id" ? idBuffer.length < ID_SEARCH_LENGTH : mobileBuffer.length < minMobileDigits)}
     label={searchBusy ? "Checking…" : "Search"}
-  /></div>}{searchStage === "found" && bottomOpen && <><div className="contact-block"><div className="contact-row"><span className="contact-text">{bottom.phone}</span><button
+  /></div>}{searchStage === "found" && bottomOpen && <>{bottom.registered === false && <div
+    role="alert"
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      margin: "0 0 12px",
+      padding: "10px 12px",
+      borderRadius: 12,
+      background: "#FEF3C7",
+      border: "1px solid #F5D68A",
+      color: "#8A5A00",
+      fontSize: 12,
+      fontWeight: 700,
+      lineHeight: 1.35
+    }}
+  ><span aria-hidden="true">⚠️</span><span>Not a registered Gloobal account. This send won't reach the backend or move any real money — it stays a local simulation only.</span></div>}<div className="contact-block"><div className="contact-row"><span className="contact-text">{bottom.phone}</span><button
     className="copy-btn"
     onClick={() => showToast2("Calling \u2014 coming soon")}
     aria-label="Call"
@@ -1121,7 +1171,7 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     onClick={handleSend}
     style={{ padding: "14px 18px", marginTop: topOpen ? 0 : 24 }}
   ><span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}><SendMoneyLucideIcon size={18} />
-                Send {CURRENCY_SYMBOL[top.currency] || ""}{fmt(convertedAmount)}</span></button>}</>}{
+                {bottom.registered === false ? "Simulate " : "Send "}{CURRENCY_SYMBOL[top.currency] || ""}{fmt(convertedAmount)}</span></button>}</>}{
     /* Funding source — the four ways a transfer can be paid. Picking
        one moves straight on to the OTP confirmation. */
   }{payMethodOpen && <div

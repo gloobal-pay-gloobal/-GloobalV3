@@ -160,7 +160,18 @@ function SymbolDialPad({ value, onChange, length, showLogo = true }) {
     }
     stopMomentum();
     registerActivity();
-    housingRef.current?.setPointerCapture?.(e.pointerId);
+    // Pointer capture is only for the ring-drag-to-rotate gesture. Capturing
+    // it when the press actually landed on a symbol/delete button breaks
+    // that button's native "click" event on desktop: once a parent element
+    // has captured the pointer, a mouse pointerdown+up over the child never
+    // dispatches "click" in Chromium, while a touch tap still does. That
+    // mismatch is exactly why this dial pad answered taps in mobile preview
+    // (touch) but not on a laptop trackpad/mouse. Skipping capture for
+    // presses that start on a button lets the button's own onClick fire
+    // normally; the open ring background still supports the drag gesture.
+    if (!e.target.closest?.("button")) {
+      housingRef.current?.setPointerCapture?.(e.pointerId);
+    }
     const angle = angleFromCenter(e.clientX, e.clientY);
     dragRef.current = { lastAngle: angle, lastTime: performance.now(), velocity: 0, moved: 0, startX: e.clientX, startY: e.clientY };
     suppressClickRef.current = false;

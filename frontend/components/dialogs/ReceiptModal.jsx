@@ -131,7 +131,7 @@ function ReceiptModal({ receipt, onClose, onDone }) {
       cursor: "pointer",
       zIndex: 1
     }}
-  ><Share2 size={13} color={T.inkSoft} /></button><div style={{ fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 16, minHeight: receiptTab === "share" ? 0 : void 0 }}>{receiptTab === "payment" ? `${isSent ? "Money sent" : "Money received"}${receipt.status === "pending" ? " \xB7 Pending" : ""}` : isSent ? <SingleOMark before="Back t" after=" you" /> : "You share back"}</div>{
+  ><Share2 size={13} color={T.inkSoft} /></button><div style={{ fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 16, minHeight: receiptTab === "share" ? 0 : void 0 }}>{receiptTab === "payment" ? `${isSent ? "Money sent" : "Money received"}${receipt.status === "pending" ? " \xB7 Pending" : receipt.status === "simulated" ? " \xB7 Not actually sent" : ""}` : isSent ? <SingleOMark before="Back t" after=" you" /> : "You share back"}</div>{
     /* Amount — matches whichever receipt is actually showing.
        Payment tab: what I sent/received, signed accordingly.
        Creator Share tab: the opposite direction from Payment —
@@ -208,7 +208,23 @@ function ReceiptModal({ receipt, onClose, onDone }) {
     mono
   />}</div>{
     /* Box 3 — payment method, date, time, status together */
-  }<div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "12px 14px", borderRadius: T.radiusMd, border: `1px solid ${T.line}` }}>{receipt.method && <ReceiptRow label="Payment method" value={receipt.method} />}<ReceiptRow label="Date" value={receipt.date} /><ReceiptRow label="Time" value={receipt.time} mono /><ReceiptRow label="Status" value={receipt.status === "pending" ? "Pending" : "Completed"} /></div></div> : <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{
+  }<div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "12px 14px", borderRadius: T.radiusMd, border: `1px solid ${T.line}` }}>{receipt.method && <ReceiptRow label="Payment method" value={receipt.method} />}<ReceiptRow label="Date" value={receipt.date} /><ReceiptRow label="Time" value={receipt.time} mono /><ReceiptRow label="Status" value={receipt.status === "pending" ? "Pending" : receipt.status === "simulated" ? "Not sent — simulated" : "Completed"} /></div>{receipt.status === "simulated" && <div
+    role="alert"
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      marginTop: 10,
+      padding: "10px 12px",
+      borderRadius: 12,
+      background: "#FEF3C7",
+      border: "1px solid #F5D68A",
+      color: "#8A5A00",
+      fontSize: 11.5,
+      fontWeight: 700,
+      lineHeight: 1.35
+    }}
+  ><span aria-hidden="true">⚠️</span><span>This recipient wasn't a registered Gloobal account, so nothing was actually sent — this receipt reflects a local simulation only.</span></div>}</div> : <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>{
     /* Creator Share's own receipt — who earned it, the rate, and
        the actual value, shown as its own document rather than a
        section tucked inside the payment receipt. Rate and amount

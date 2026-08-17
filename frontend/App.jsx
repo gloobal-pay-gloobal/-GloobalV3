@@ -335,7 +335,13 @@ function GloobalId() {
       name: scanPendingPayment.recipientName || "Gloobal User",
       mobileNumber: scanPendingPayment.recipientMobile || "",
       currency: COUNTRY_CURRENCY[dialCountry.iso] || "USD",
-      shareRate: scanPendingPayment.recipientShareRate || 0
+      shareRate: scanPendingPayment.recipientShareRate || 0,
+      // Carried through so Send Money can warn before the person pays,
+      // the same way the scan confirmation card already does — an
+      // unregistered ID handed to Send Money used to arrive indistinguishable
+      // from a real one, which is what let this screen skip its own honest
+      // "unregistered" label entirely.
+      registered: Boolean(scanPendingPayment.registered)
     });
     setShowScanScreen(false);
     setScanPendingPayment(null);
@@ -369,6 +375,13 @@ function GloobalId() {
     }
     const amount = scanPendingPayment.amountCents / 100;
     const ccy = CURRENCY_SYMBOL[COUNTRY_CURRENCY[dialCountry.iso] || "USD"] || "$";
+    // Declared out here, not inside the `if (amount > 0)` block below, so
+    // the final toast — which runs after that block, for both the
+    // zero-amount and paid cases — can still tell a real send from a
+    // skipped/simulated one. Defaults true: a zero-amount identity-only
+    // scan never claims money moved, so it has nothing to be dishonest
+    // about either way.
+    let scanSettledRemotely = true;
     if (amount > 0) {
       let txnId = genTxnId();
       const now = /* @__PURE__ */ new Date();
@@ -403,6 +416,7 @@ function GloobalId() {
       // leaves the backend no counterparty to credit. Those stay a local
       // simulation, exactly as they were.
       const settledRemotely = Boolean(remote && remote.ok && !remote.skipped);
+      scanSettledRemotely = settledRemotely;
       if (settledRemotely && remote.transactionId) txnId = remote.transactionId;
       // The payee's real Creator Share, as the server applied it. A scanned
       // code carries no rate of its own, so this used to be hardcoded 0 and
@@ -438,7 +452,13 @@ function GloobalId() {
           name: scanPendingPayment.recipientName || scanPendingPayment.gloobalId,
           date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           amount,
-          status: "completed",
+          // A skipped/local-only send must not read as "completed" here
+          // either — History and the reopened receipt (buildHistoryReceipt
+          // passes an unrecognised status straight through) are the only
+          // record of this payment a person can go back and check, and
+          // "completed" next to money that was never posted is exactly the
+          // fake-success this status exists to prevent.
+          status: settledRemotely ? "completed" : "simulated",
           method: scanPayMethod && scanPayMethod.includes("PayLater") ? "paylater" : "bank",
           time: formatClockTime(now),
           txnId,
@@ -469,7 +489,13 @@ function GloobalId() {
     scanVerifiedPinRef.current = null;
     setShowScanScreen(false);
     setScanPendingPayment(null);
-    showToast(amount > 0 ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked` : "Gloobal ID verified and locked");
+    showToast(
+      amount > 0
+        ? scanSettledRemotely
+          ? `Paid ${ccy}${amount.toFixed(2)} \u2014 verified and locked`
+          : `Not sent \u2014 ${ccy}${amount.toFixed(2)} recorded locally only, no registered Gloobal account to credit`
+        : "Gloobal ID verified and locked"
+    );
   };
   const [demoScanTarget] = useState19(() => {
     const demoId = genSuggestedId(12);
