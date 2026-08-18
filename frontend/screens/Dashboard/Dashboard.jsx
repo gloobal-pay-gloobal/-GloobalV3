@@ -35,8 +35,27 @@ import {
 } from "lucide-react";
 
 
+// Bug fix / feature: the GH Score circle on the profile overview card used
+// to be a small 76px corner accent, leaving most of the card's fixed
+// (aspectRatio-driven) height empty purple background above the ID row
+// pinned to its bottom. Sized up into a real hero element instead — see
+// the card's own layout comment for why its height is fixed at all, and
+// GH_ID_ROW_RESERVE below for how the ID row still avoids sitting under
+// it at this larger size.
+var GH_HERO_CIRCLE_SIZE = 136;
+// A small safety margin on the ID row's right edge — NOT sized to dodge
+// the whole circle horizontally the way the original 68px reserve did.
+// The card's own layout (fixed aspectRatio + justifyContent: flex-end,
+// see the card's own comment) already keeps the row below the circle
+// vertically, in the space that's clear underneath it; a full-width
+// horizontal reserve was fighting that same clearance twice over, and at
+// GH_HERO_CIRCLE_SIZE's larger size it would have choked the row down to
+// single-digit-px dots — the opposite of "make the dots bigger." This
+// stays purely to keep the row's last character from touching the card's
+// rounded corner, not to route around the circle.
+var GH_ID_ROW_RESERVE = 10;
 // src/screens/Dashboard/Dashboard.jsx
-function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, profilePhoto, onChangeProfilePhoto, sendHistory, receivedHistory = [], bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange, onGloobalIdChange }) {
+function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpenCoverage, onOpenScan, myGloobalId, creatorId, myName, openHistoryDirection, onConsumeOpenHistory, deepLinkTarget, onConsumeDeepLink, profilePhoto, onChangeProfilePhoto, sendHistory, receivedHistory = [], bankBalance, assetSeeds, onPayBusiness, paylaterHistory, accountCreatedAt, onSettleAssetsToBank, onSettleReferralToBank, pendingOpenMyShare, onConsumePendingMyShare, essentialsIHaveEnough, onToggleEssentialsIHaveEnough, onShareRoleChange, onMyShareRateChange, onGloobalIdChange }) {
   const [balanceVisible, setBalanceVisible] = useState14(false);
   const [showBalanceBiometric, setShowBalanceBiometric] = useState14(false);
   const [balanceBiometricScanning, setBalanceBiometricScanning] = useState14(false);
@@ -612,6 +631,22 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       setProfileDetail("History");
     }
   }, [openHistoryDirection]);
+  // Opens the sub-screen the app map asked for (App.jsx's dashboardDeepLink
+  // — see components/common/appMap.jsx). Dashboard.jsx is the only place
+  // that owns these show* booleans, so App.jsx can't set them directly; it
+  // hands over what it wants opened, and this is consumed exactly once —
+  // same "consume and clear" shape as openHistoryDirection/onConsumeOpenHistory
+  // just above, so tapping the same map entry again still re-opens it even
+  // if the target string didn't change.
+  useEffect12(() => {
+    if (!deepLinkTarget) return;
+    if (deepLinkTarget === "bank") setShowGloobalBankInfo(true);
+    else if (deepLinkTarget === "coin") setShowGloobalCoinInfo(true);
+    else if (deepLinkTarget === "assets") setShowAssets(true);
+    else if (deepLinkTarget === "paylater") setShowPayLater(true);
+    else if (deepLinkTarget === "aboutus") setShowAboutUs(true);
+    if (onConsumeDeepLink) onConsumeDeepLink();
+  }, [deepLinkTarget]);
   useEffect12(() => {
     if (pendingOpenMyShare) {
       setShowMyShare(true);
@@ -1464,7 +1499,7 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
        bigger so it reads as a real focal point. Still blinks
        through colors, flips to reveal the logo every 10
        seconds, tap opens the Edit ID / GH Score menu. */
-  }<span style={{ position: "absolute", top: 14, right: 14, zIndex: 1 }}><div style={{ width: 76, height: 76, flexShrink: 0, perspective: 600 }}><button
+  }<span style={{ position: "absolute", top: 14, right: 14, zIndex: 1 }}><div style={{ width: GH_HERO_CIRCLE_SIZE, height: GH_HERO_CIRCLE_SIZE, flexShrink: 0, perspective: 600 }}><button
     onClick={() => setShowGhCircleMenu((v) => !v)}
     aria-label={`GH Score, ${ghRawTotal} of ${ghMaxTotal} \u2014 tap for options`}
     style={{
@@ -1630,13 +1665,13 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
   }<div
     style={{
       position: "relative",
-      // Same 76px GH Score circle, same reason. IdSymbolDots in oneLine
-      // mode takes width: 100% and divides it between the twelve
-      // characters, so with nothing reserving the circle's column the
-      // last few characters of the Gloobal ID were drawn underneath it —
-      // the overlap on the profile card. Reserving the column makes the
-      // characters shrink to fit the space that is actually free.
-      paddingRight: 68
+      // See GH_ID_ROW_RESERVE above. IdSymbolDots in oneLine mode takes
+      // width: 100% and divides it between the twelve characters, so with
+      // nothing reserving the circle's column the last few characters of
+      // the Gloobal ID were drawn underneath it — the overlap on the
+      // profile card. Reserving the column makes the characters shrink to
+      // fit the space that is actually free.
+      paddingRight: GH_ID_ROW_RESERVE
     }}
   ><button
     onClick={() => setShowGhCircleMenu(true)}
@@ -1652,7 +1687,15 @@ function DashboardScreen({ dialCountry, onLogout, onOpenSend, onOpenBank, onOpen
       cursor: "pointer",
       width: "100%"
     }}
-  ><IdSymbolDots id={personalGloobalId} revealed oneLine /></button></div></div><div style={{ borderRadius: T.radiusLg, overflow: "hidden", boxShadow: T.shadowCard, display: "flex", flexDirection: "column", gap: 2 }}>{PROFILE_ROWS.map((label, i) => {
+  >{
+    /* Bug fix: size defaulted to 20 (24 in the old oneLine cap) — small
+       enough that the whole row sat as a thin strip at the bottom of a
+       much taller card, with most of the card's own height going unused
+       above it. Sized up so the row is a real second focal point next to
+       the GH Score circle rather than an afterthought; IdSymbolDots still
+       shrinks each dot to fit whatever width is actually free (see its
+       own comment), so this is a ceiling, not a fixed size. */
+  }<IdSymbolDots id={personalGloobalId} revealed oneLine size={48} /></button></div></div><div style={{ borderRadius: T.radiusLg, overflow: "hidden", boxShadow: T.shadowCard, display: "flex", flexDirection: "column", gap: 2 }}>{PROFILE_ROWS.map((label, i) => {
     const rowColor = POSITION_COLORS[i % POSITION_COLORS.length];
     return <button
       key={label}

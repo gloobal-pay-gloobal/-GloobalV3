@@ -16,7 +16,16 @@ function IdSymbolDots({ id, revealed = true, size = 20, oneLine = false }) {
   const chars = (id || "").replace(/\s/g, "").split("");
   const [flipped, setFlipped] = useState4(() => chars.map(() => false));
   const [colorOffset, setColorOffset] = useState4(0);
-  const dotSize = oneLine ? Math.min(size + 4, 24) : size;
+  // Bug fix: oneLine mode used to hard-cap itself at 24px (Math.min(size +
+  // 4, 24)) no matter what `size` a caller asked for — fine back when
+  // every oneLine usage wanted a small inline row, but it meant the
+  // profile card's ID row couldn't actually grow when asked to. The row
+  // already has its own real ceiling — each dot is `flex: 1 1 0` with
+  // `maxWidth: dotSize` (below), so it naturally shrinks to fit whatever
+  // width is actually available and never overflows the row — so a
+  // second, arbitrary cap here was only ever making dots smaller than the
+  // space allowed, not protecting anything.
+  const dotSize = size;
   useEffect4(() => {
     const interval = setInterval(() => {
       const i = Math.floor(Math.random() * chars.length);
