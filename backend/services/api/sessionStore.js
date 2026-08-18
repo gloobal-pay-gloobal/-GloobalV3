@@ -45,6 +45,7 @@ function gloobalSessionReadRaw() {
 function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
   if (!user || !user.symbolId) return;
   const previous = gloobalSessionReadRaw();
+  const previousUser = previous && previous.user;
   // Only inherit from a session belonging to the SAME account. The flag
   // says "this device has a passkey for this account", so carrying it
   // across a change of account is simply wrong: account A enrolling and
@@ -52,7 +53,21 @@ function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
   // enrolment it does not have, which strands B on a mandatory biometric
   // screen (no skip is offered for an enrolled account) whenever the
   // server check that would correct it is unreachable.
-  const sameAccount = Boolean(previous && previous.user && previous.user.symbolId === user.symbolId);
+  //
+  // Bug fix: "same account" used to mean only "same symbolId" — which
+  // breaks the instant the account's OWN Gloobal ID changes (Update
+  // Gloobal ID, handleGloobalIdChanged in App.jsx). Going from the old ID
+  // to the new one looked, from here, identical to a completely different
+  // person signing in: same symptom (symbolId no longer matches), totally
+  // different cause. Matching on mobileNumber too — which an ID rename
+  // never touches — tells the two apart. See the account-switch notice
+  // below for what this distinction actually protects.
+  const sameAccount = Boolean(
+    previousUser && (
+      (previousUser.symbolId && previousUser.symbolId === user.symbolId) ||
+      (previousUser.mobileNumber && user.mobileNumber && previousUser.mobileNumber === user.mobileNumber)
+    )
+  );
   // undefined keeps whatever was already stored, so a save on every render
   // can't wipe a flag the enrolment step just set.
   const enrolled = biometricEnrolled === void 0 ? Boolean(sameAccount && previous.biometricEnrolled) : Boolean(biometricEnrolled);
@@ -80,20 +95,55 @@ function gloobalSessionSave(user, phoneNumber, biometricEnrolled) {
     // Storage unavailable — the app still works this session, it just won't
     // survive the next reload. Nothing to recover from.
   }
-  // Bug fix: a genuinely different account signing in — including the very
-  // first sign-in this page load, not just a same-account resave — used to
-  // notify nobody. Only gloobalSessionSetSymbolId (an in-place ID rename)
-  // fired GLOOBAL_SYMBOL_ID_EVENT, so nothing told the rest of the app "the
-  // signed-in account changed" on an ordinary login or a fresh registration.
-  // Concretely, GloobalArtifactRoot (src/__artifactEntry.jsx) keys its
-  // <LedgerProvider> and account-scoped tree off this event via
-  // useCurrentSymbolId() specifically so a NEW account gets a clean local
-  // ledger and a clean transaction-history list instead of inheriting
-  // whatever the PREVIOUS account (in the same tab, same page load) had
-  // accumulated — without this notification, that remount never happened,
-  // which is the root cause of a new account appearing to already have
-  // another account's balance and spending history.
-  if (!sameAccount) gloobalNotifySymbolIdChanged(user.symbolId);
+  // Two different notifications, for two different audiences — conflating
+  // them is what caused both bugs described below.
+  //
+  // 1. GLOOBAL_SYMBOL_ID_EVENT (broad): "the ID this account answers to may
+  // have changed." Every screen that just displays the current Gloobal ID
+  // (Receive QR, the share card, Personal Details, the referral link —
+  // see useCurrentSymbolId) listens for this so a rename lands on all of
+  // them at once instead of only the screen that performed it. Fired
+  // whenever the stored symbolId actually changes, rename or switch alike.
+  const idChanged = Boolean(!previousUser || previousUser.symbolId !== user.symbolId);
+  if (idChanged) gloobalNotifySymbolIdChanged(user.symbolId);
+  // 2. GLOOBAL_ACCOUNT_SWITCH_EVENT (narrow): "a DIFFERENT account is now
+  // signed in on this device." GloobalArtifactRoot (src/__artifactEntry.jsx)
+  // keys its <LedgerProvider> — with GloobalId (the whole app, registration
+  // flow included) nested INSIDE it — off this one, specifically so a new
+  // account gets a clean local ledger and clean transaction history instead
+  // of inheriting whatever the PREVIOUS account (same tab, same page load)
+  // had accumulated.
+  //
+  // Bug fix: this used to fire on any symbolId change at all, same as the
+  // broad event above — which is wrong on two different counts.
+  //
+  // First, it must not fire on the very first save of a brand new account
+  // in a tab that had nothing signed in before (`previous` is null). That
+  // happens the instant a fresh registration finishes (the first
+  // gloobalSessionSave call for the new account, at the biometric step) —
+  // there is no earlier account's ledger in this tab to leak from. But
+  // because GloobalId sits inside the keyed <LedgerProvider>, firing this
+  // anyway force-unmounts the entire app mid-registration — including the
+  // in-flight flipTo("dashboard") transition — and the remounted app's own
+  // mount-time session-restore effect then finds the session just written
+  // and treats it like a returning user, landing on the login screen
+  // instead of the dashboard just registered into.
+  //
+  // Second, and separately, it must not fire when the CURRENT account
+  // renames its own ID (handleGloobalIdChanged, via gloobalSessionSetSymbolId
+  // right after this same call) — that is exactly what `sameAccount`'s
+  // mobileNumber match above now catches. Without it, an ID rename looked
+  // identical to a fresh sign-in of a different person: same
+  // force-remount, same wiped local ledger (My Essentials / PayLater
+  // history both live only in that ledger — see
+  // frontend/adapters/ledger/useLedgerProjections.js — with nothing on the
+  // backend to recover them from), same reset "joined" date (App.jsx's
+  // accountCreatedAt), and the Update Gloobal ID screen's own change log
+  // (Dashboard.jsx's idUpdateHistory) never survived long enough to be
+  // seen, since it is local state on the very component instance that had
+  // just unmounted.
+  const hadPreviousAccount = Boolean(previousUser && previousUser.symbolId);
+  if (!sameAccount && hadPreviousAccount) gloobalNotifyAccountSwitched(user.symbolId);
 }
 
 // Returns { user, phoneNumber, biometricEnrolled } for a valid, unexpired
@@ -201,6 +251,18 @@ function gloobalCurrentSymbolId() {
 // frontend/hooks/useCurrentSymbolId.js).
 var GLOOBAL_SYMBOL_ID_EVENT = "gloobal:symbolIdChanged";
 
+// Fired only when the signed-in ACCOUNT changes — a fresh login, an
+// account switch, or a sign-out — never for that same account renaming
+// its own Gloobal ID. Deliberately a separate event from
+// GLOOBAL_SYMBOL_ID_EVENT above: the two used to be the same event, which
+// meant every consumer had to react to it the same way, and the one
+// consumer that keys a full remount off it (GloobalArtifactRoot's
+// <LedgerProvider>, in src/__artifactEntry.jsx) can't tell "you're signed
+// in as someone else now, reset everything local" apart from "same
+// person, new label" without its own signal. See gloobalSessionSave's
+// account-switch notice for what conflating them broke.
+var GLOOBAL_ACCOUNT_SWITCH_EVENT = "gloobal:accountSwitched";
+
 function gloobalSessionSetSymbolId(newSymbolId) {
   if (!newSymbolId) return;
   const parsed = gloobalSessionReadRaw();
@@ -232,6 +294,15 @@ function gloobalNotifySymbolIdChanged(newSymbolId) {
   }
 }
 
+function gloobalNotifyAccountSwitched(newSymbolId) {
+  try {
+    window.dispatchEvent(new CustomEvent(GLOOBAL_ACCOUNT_SWITCH_EVENT, { detail: { symbolId: newSymbolId } }));
+  } catch (e) {
+    // No window (SSR probes) or no CustomEvent — nothing is listening
+    // there either, so there is nothing to fall back to.
+  }
+}
+
 function gloobalSessionClear() {
   try {
     window.localStorage.removeItem(GLOOBAL_SESSION_KEY);
@@ -239,9 +310,11 @@ function gloobalSessionClear() {
     // A stale blob is harmless — gloobalSessionLoad re-validates shape on
     // every read.
   }
-  // Bug fix (see gloobalSessionSave's own comment): signing out is an
-  // account-identity change too — to "no account" — and the same remount
-  // needs to happen so the NEXT sign-in on this page doesn't inherit
-  // whoever just signed out's local ledger/history state.
+  // Signing out is a real account-identity change too — to "no account" —
+  // so both notices fire: the broad one so any screen still showing an ID
+  // clears it, and the account-switch one so the local ledger resets and
+  // the NEXT sign-in on this page doesn't inherit whoever just signed
+  // out's balance/history.
   gloobalNotifySymbolIdChanged(null);
+  gloobalNotifyAccountSwitched(null);
 }
