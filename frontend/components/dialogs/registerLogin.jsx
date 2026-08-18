@@ -238,7 +238,7 @@ function PhoneConnector({ country, phoneNumber, onOpenPicker, onOpenDial, dialOp
             IN
           </button></div>}</div>;
 }
-function CountryPickerScreen({ topCountries, countries, search, onSearch, onSelect, onClose }) {
+function CountryPickerScreen({ topCountries, countries, search, onSearch, onSelect, onClose, selectedIso }) {
   const [expanded, setExpanded] = useState6(false);
   const q = search.trim().toLowerCase();
   const filtered = q ? countries.filter((c) => countryMatches(c, search)) : expanded ? countries : topCountries;
@@ -315,7 +315,16 @@ function CountryPickerScreen({ topCountries, countries, search, onSearch, onSele
       gap: 12
     }}
   >{filtered.map((c) => {
-    const isActive = c.iso === "IN";
+    // Bug fix: this used to be hardcoded to `c.iso === "IN"`, so India's
+    // flag always showed the "selected" glow no matter which country was
+    // actually picked (this screen was never even given the current
+    // selection to compare against). Someone choosing, say, the US would
+    // tap it, watch the picker close, and — if they reopened it to
+    // double check — see India still glowing as if their choice had
+    // silently reverted, even though dialCountry itself had updated
+    // correctly. Comparing against the real selectedIso prop instead
+    // fixes the highlight to track whatever was actually chosen.
+    const isActive = c.iso === selectedIso;
     return <button
       key={c.iso}
       onClick={() => onSelect(c)}

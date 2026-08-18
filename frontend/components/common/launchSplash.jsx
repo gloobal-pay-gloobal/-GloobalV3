@@ -1,17 +1,56 @@
 // src/components/common/launchSplash.jsx
 import { useState as useState20, useEffect as useEffect16, useRef as useRef14 } from "react";
-var HOLD_LOGO_MS = 650;
-var FLIP_MS = 550;
-var HOLD_SYMBOL_MS = 500;
+// Bug fix / feature: this used to hold on the logo, flip once to a
+// single random dial symbol, then fade — a fixed two-face reveal on
+// every launch. What was actually wanted is the same "living rotating
+// logo" the biometric flip screen already does (see
+// components/common/flipIcons.jsx and screens' BiometricVerifyScreen):
+// the real mark and the app's 8 dial-pad symbols treated as nine faces
+// of the one card, flipping through them so it reads as nine different
+// logos even though it is always the same one. A full pass through all
+// nine at a comfortable read speed is ~18s (2s/face) — far too long
+// for a screen that blocks getting into the app — so this keeps the
+// launch window short (~4s total) and only plays the FIRST flip of a
+// freshly shuffled nine-face sequence: the logo, then one dial symbol,
+// a different one most launches. Same flip mechanic, same "it's
+// actually one logo" trick, just caught for one beat instead of run to
+// completion.
+var HOLD_LOGO_MS = 2000;
+var FLIP_MS = 500;
+var HOLD_SYMBOL_MS = 1100;
 var FADE_MS = 400;
-var REDUCED_MOTION_HOLD_MS = 500;
+var REDUCED_MOTION_HOLD_MS = 900;
 var BOX_SIZE = "52vw";
 var BOX_MAX = 240;
 var BOX_RADIUS = "22%";
 var CONTENT_FILL = "66%";
+// Fisher-Yates on a copy of the dial pad's own 8 symbols (constants/
+// theme.js), so which one shows up as the splash's second face is a
+// different one most app launches rather than the same fixed symbol
+// every time.
+function shuffledDialSymbols() {
+  const symbols = DIAL_SYMBOLS.slice();
+  for (let i = symbols.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = symbols[i];
+    symbols[i] = symbols[j];
+    symbols[j] = tmp;
+  }
+  return symbols;
+}
 function LaunchSplash({ onFinish }) {
   const [phase, setPhase] = useState20("logo");
-  const symbolRef = useRef14(DIAL_SYMBOLS[Math.floor(Math.random() * DIAL_SYMBOLS.length)]);
+  // The full nine-face sequence — real logo first, then all 8 dial
+  // symbols in a fresh shuffle — built once per mount (not per render)
+  // so the order is stable for the lifetime of this splash. Only faces
+  // [0] (the logo) and [1] (the first shuffled symbol) are ever actually
+  // shown given the short fixed window below; the rest of the sequence
+  // exists so extending HOLD_SYMBOL_MS later to run the full nine-face
+  // cycle needs no further changes here.
+  const sequenceRef = useRef14(null);
+  if (!sequenceRef.current) {
+    sequenceRef.current = [{ type: "logo" }, ...shuffledDialSymbols().map((symbol) => ({ type: "symbol", symbol }))];
+  }
   const prefersReducedMotion = useRef14(
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
   );
@@ -52,7 +91,7 @@ function LaunchSplash({ onFinish }) {
        right) for a glossy, extruded look. Everything inside it
        (logo/symbol) just flips; the box's shape, tilt, and fill never
        change. */
-  }<div style={{ perspective: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}><div
+  }{prefersReducedMotion.current ? <div style={{ perspective: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}><div
     style={{
       width: BOX_SIZE,
       height: BOX_SIZE,
@@ -62,41 +101,30 @@ function LaunchSplash({ onFinish }) {
       background: "linear-gradient(135deg,#4F46E5 0%,#7C3AED 100%)",
       boxShadow: "0 2px 0 rgba(76,29,149,0.55), 0 12px 22px rgba(76,29,149,0.38), 0 30px 58px rgba(76,29,149,0.26)",
       transform: "rotateX(10deg) rotateY(-10deg)",
-      transition: "transform 0.6s ease",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       overflow: "hidden",
-      position: "relative",
-      perspective: 800
+      position: "relative"
     }}
-  ><div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0) 32%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.2) 100%)", pointerEvents: "none" }} />{prefersReducedMotion.current ? <img
+  ><div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, rgba(255,255,255,0.32) 0%, rgba(255,255,255,0) 32%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.2) 100%)", pointerEvents: "none" }} /><img
     src={G_LOGO_DATA_URI}
     alt=""
     style={{ width: CONTENT_FILL, height: CONTENT_FILL, objectFit: "contain", filter: "brightness(0) invert(1)" }}
-  /> : <div
-    style={{
-      position: "relative",
-      width: CONTENT_FILL,
-      height: CONTENT_FILL,
-      transformStyle: "preserve-3d",
-      transition: `transform ${FLIP_MS}ms cubic-bezier(.4,.15,.2,1)`,
-      transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)"
-    }}
-  ><span style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}><img
-    src={G_LOGO_DATA_URI}
-    alt=""
-    style={{ width: "100%", height: "100%", objectFit: "contain", filter: "brightness(0) invert(1)" }}
-  /></span><span
-    style={{
-      position: "absolute",
-      inset: 0,
-      backfaceVisibility: "hidden",
-      transform: "rotateY(180deg)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center"
-    }}
-  ><span style={{ fontSize: "33vw", maxWidth: 158, fontWeight: 800, color: "#fff", fontFamily: T.fontDisplay, lineHeight: 1 }}>{symbolRef.current}</span></span></div>}</div></div></div>;
+  /></div></div> : (
+    // Same box the Bank/Coin hero renders (LivingLogoBoxVisual, in
+    // flipIcons.jsx) — the splash and "the app logo" everywhere else are
+    // now literally the same component, not just similar-looking copies.
+    <LivingLogoBoxVisual
+      front={sequenceRef.current[0]}
+      back={sequenceRef.current[1]}
+      flipped={flipped}
+      size={BOX_SIZE}
+      maxSize={BOX_MAX}
+      contentFill={CONTENT_FILL}
+      borderRadius={BOX_RADIUS}
+      flipMs={FLIP_MS}
+    />
+  )}</div>;
 }
 

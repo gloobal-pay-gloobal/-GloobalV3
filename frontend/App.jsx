@@ -137,6 +137,36 @@ function markPermissionsGateSeen() {
     // minor repeat, not a broken app.
   }
 }
+// Feature: the app map (the floating draggable icon + searchable screen
+// list, see components/common/appMap.jsx) shows every registration-flow
+// screen and every post-login destination in one list, with the ones that
+// don't apply yet greyed out as "Locked." Which half is locked depends on
+// whether this device has EVER finished registration — not whether
+// someone happens to be signed in right now, since signing out again
+// shouldn't hide Dashboard/Bank/Coin behind a lock the person already
+// cleared once. So this needs its own persisted flag, independent of
+// gloobalSessionSave/gloobalSessionClear (session identity, cleared on
+// sign-out) — same "own localStorage key, guarded against a private-mode
+// throw" shape as GLOOBAL_PERMISSIONS_GATE_KEY just above.
+var GLOOBAL_HAS_REGISTERED_KEY = "gloobal.hasEverRegistered.v1";
+function hasEverRegistered() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(GLOOBAL_HAS_REGISTERED_KEY) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+function markEverRegistered() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(GLOOBAL_HAS_REGISTERED_KEY, "1");
+  } catch (e) {
+    // No storage — the app map will simply treat every future visit as
+    // "not yet registered" on this device, which just re-locks a few map
+    // entries; it doesn't block using the app itself.
+  }
+}
 // src/App.jsx
 function GloobalId() {
   const stageRef = useRef13(null);
@@ -178,7 +208,10 @@ function GloobalId() {
     setHeroCircleTapped(true);
     setTimeout(() => setHeroCircleTapped(false), 1400);
   };
-  const [accountCreatedAt] = useState19(() => /* @__PURE__ */ new Date());
+  // accountCreatedAt is declared further down, right after registeredUser
+  // (see there for why) — this used to be its own useState(() => new
+  // Date()) sitting here with no connection to the account at all.
+  const accountCreatedAtFallbackRef = useRef13(null);
   const [essentialsIHaveEnough, setEssentialsIHaveEnough] = useState19(false);
   const handleToggleEssentialsIHaveEnough = () => setEssentialsIHaveEnough((v) => !v);
   const [sendMoneyHistory, setSendMoneyHistory] = useState19(SEND_MONEY_HISTORY_SEED);
@@ -597,6 +630,12 @@ function GloobalId() {
   };
   const handleExecuteTransaction = executeTransaction;
   const [stage, setStage] = useState19(() => hasSeenPermissionsGate() ? "phone" : "permissions");
+  // Backs the app map's lock state (see the comment on hasEverRegistered
+  // above) — mirrored into React state, rather than read straight from
+  // localStorage each render, purely so the map's "Dashboard/Bank/Coin…"
+  // section re-renders unlocked the instant registration or login first
+  // succeeds, without needing a remount to notice the flag changed.
+  const [everRegistered, setEverRegistered] = useState19(hasEverRegistered);
   const handleContinueFromPermissionsGate = () => {
     markPermissionsGateSeen();
     setStage("phone");
@@ -666,6 +705,32 @@ function GloobalId() {
     }
   };
   const [dashboardHistoryDirection, setDashboardHistoryDirection] = useState19(null);
+  // Which Dashboard sub-screen the app map should open once Dashboard.jsx
+  // is actually mounted — "bank" | "coin" | "assets" | "paylater" |
+  // "aboutus" | null. Dashboard.jsx watches this prop and opens the
+  // matching internal show* screen itself; App.jsx only owns the request,
+  // not the screen state, since each of those booleans is local to
+  // Dashboard.jsx. "send" and "coverage" don't go through this — they're
+  // App.jsx's own activeScreen instead (see goToDashboardDestination).
+  const [dashboardDeepLink, setDashboardDeepLink] = useState19(null);
+  // Where the app map wanted to go when it was tapped from a screen that
+  // isn't Dashboard and the person isn't currently signed in (e.g. they
+  // signed out after registering once, and tap "Send Money" from the
+  // map). goToDashboardDestination sends them to Login instead of failing
+  // silently, and this remembers the original destination so it opens the
+  // moment they actually land on Dashboard rather than dropping them on
+  // the plain Dashboard home with no explanation.
+  const [pendingMapDestination, setPendingMapDestination] = useState19(null);
+  useEffect15(() => {
+    if (stage !== "dashboard" || !pendingMapDestination) return;
+    applyDashboardDestination(pendingMapDestination);
+    setPendingMapDestination(null);
+    // applyDashboardDestination is defined below and is stable across
+    // renders in everything it closes over that matters here (it only
+    // calls other setters), so it's intentionally left out of the
+    // dependency array rather than hoisted above this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, pendingMapDestination]);
   const [pendingOpenMyShare, setPendingOpenMyShare] = useState19(false);
   const [secureIdRevealed, setSecureIdRevealed] = useState19(false);
   const [referralRevealed, setReferralRevealed] = useState19(false);
@@ -699,6 +764,36 @@ function GloobalId() {
   // What the backend returned for this account. The whole app keys off
   // registeredUser.symbolId once past registration.
   const [registeredUser, setRegisteredUser] = useState19(null);
+  // Bug fix: accountCreatedAt used to be its own useState(() => new Date())
+  // — a client-side "now" with no connection to the account at all. It
+  // looked fine as long as nothing ever remounted GloobalId, but the
+  // backend already tracks the real join date (User.createdAt, sent back
+  // as createdAt/joinedDate on every register-symbol, login and profile
+  // response — see publicUserPayload in Backend/server.js) and this never
+  // read it. So Personal Details' "Joined" date was always just "whenever
+  // this browser tab happened to load," and it visibly reset to "now"
+  // every time something remounted GloobalId — most noticeably right
+  // after Update Gloobal ID, before that remount was fixed at its own
+  // source (see gloobalSessionSave's account-switch notice in
+  // sessionStore.js).
+  //
+  // The real value is read straight from registeredUser once the backend
+  // has answered, which is why this sits here rather than up with the
+  // other early useState calls. accountCreatedAtFallbackRef (declared up
+  // there, since it needs no data from registeredUser) only covers the
+  // brief window during registration before the account exists
+  // server-side at all, and is itself computed once — not on every
+  // render — so it does not drift.
+  const registeredCreatedAtRaw = registeredUser && (registeredUser.createdAt || registeredUser.joinedDate);
+  let accountCreatedAt = null;
+  if (registeredCreatedAtRaw) {
+    const parsedCreatedAt = new Date(registeredCreatedAtRaw);
+    if (!Number.isNaN(parsedCreatedAt.getTime())) accountCreatedAt = parsedCreatedAt;
+  }
+  if (!accountCreatedAt) {
+    if (!accountCreatedAtFallbackRef.current) accountCreatedAtFallbackRef.current = /* @__PURE__ */ new Date();
+    accountCreatedAt = accountCreatedAtFallbackRef.current;
+  }
   // Set when /api/otp/send answers 409. Kept apart from authError because
   // it is not a transient failure to retry — it is a dead end for
   // registration, and the card renders it with a "Log in instead" action.
@@ -944,12 +1039,115 @@ function GloobalId() {
     };
   }, [secureId, isLoginAttempt, loginEntryMode, stage]);
   const flipTo = (next) => {
+    // Every path that ever reaches "dashboard" — registration finishing,
+    // a fresh login, a restored session's PIN check — funnels through
+    // here, so this is the one place that needs to know about it to keep
+    // hasEverRegistered accurate (see its own comment above).
+    if (next === "dashboard" && !everRegistered) {
+      markEverRegistered();
+      setEverRegistered(true);
+    }
     setFlipping(true);
     setTimeout(() => {
       setStage(next);
       setFlipping(false);
     }, 220);
   };
+  // App-map navigation. These are deliberately plain "go there" helpers —
+  // no confirmation, no attempt to preserve whatever the person was mid-
+  // way through — because that's what a map is for. The four functions
+  // below cover every way a map entry can be reached:
+  //   - a pre-registration entry (Mobile Number / Create Gloobal ID /
+  //     Referral Code) → straight to that registration stage;
+  //   - the Login entry → straight to the login form;
+  //   - an unlocked post-registration destination while already on
+  //     Dashboard → open it immediately;
+  //   - the same destination from anywhere else (including signed out on
+  //     a device that has registered before) → send them to Login first,
+  //     remembering the destination so it opens the moment they land.
+  const goToRegistrationStart = () => {
+    setIsLoginAttempt(false);
+    flipTo("phone");
+  };
+  const goToLogin = () => {
+    setIsLoginAttempt(true);
+    setLoginEntryMode("id");
+    flipTo("secureId");
+  };
+  // Applies a Dashboard-level destination that is already safe to open —
+  // either because Dashboard is already mounted (stage === "dashboard"),
+  // or because pendingMapDestination's effect above is calling this the
+  // instant it becomes true. "send" and "coverage" are App.jsx's own
+  // activeScreen overlays; everything else is a Dashboard-internal show*
+  // screen, requested via dashboardDeepLink and opened by Dashboard.jsx
+  // itself (see its deepLinkTarget prop).
+  const applyDashboardDestination = (target) => {
+    if (!target) return;
+    if (target === "send") {
+      setActiveScreen("send");
+      return;
+    }
+    if (target === "coverage") {
+      setActiveScreen("coverage");
+      return;
+    }
+    if (target === "history") {
+      // Same mechanism the dashboard's own "Paid" history link already
+      // uses (see the SendMoney onOpenPaidHistory callback below) — any
+      // truthy value opens history; "sending" is the value already
+      // proven to work end-to-end.
+      setDashboardHistoryDirection("sending");
+      return;
+    }
+    setDashboardDeepLink(target);
+  };
+  const goToDashboardDestination = (target) => {
+    if (stage === "dashboard") {
+      applyDashboardDestination(target);
+      return;
+    }
+    // Not on Dashboard right now (mid-flow elsewhere, or signed out on a
+    // device that has registered before) — get them signed in first, and
+    // remember where they actually wanted to go.
+    setPendingMapDestination(target);
+    goToLogin();
+  };
+  // What tapping a LOCKED map entry does: jump to whichever screen
+  // actually unlocks it, rather than doing nothing or just explaining why
+  // it's locked. Pre-registration entries lock once the device has
+  // registered before, and the only thing that could still make sense of
+  // tapping one then is signing back in; post-registration entries lock
+  // until that first registration happens, so the fix is the start of
+  // registration itself.
+  const handleAppMapLockedPress = (entry) => {
+    if (entry.group === "pre") {
+      goToLogin();
+    } else {
+      goToRegistrationStart();
+    }
+  };
+  // The app map's full entry list. "pre" entries are the registration
+  // flow's own checkpoints (locked once this device has registered
+  // before — there's nothing left to do there); "post" entries are the
+  // main, signed-in destinations (locked until that first registration
+  // happens). Login is the one pre-registration entry that's never
+  // locked — it's still the right place to go on a device that has
+  // registered before but is currently signed out.
+  const appMapEntries = [
+    { key: "phone", group: "pre", label: "Mobile Number", locked: everRegistered, onPress: goToRegistrationStart },
+    { key: "secureId", group: "pre", label: "Create Gloobal ID", locked: everRegistered, onPress: () => { setIsLoginAttempt(false); flipTo("secureId"); } },
+    { key: "referral", group: "pre", label: "Referral Code", locked: everRegistered, onPress: () => { setIsLoginAttempt(false); flipTo("referral"); } },
+    { key: "login", group: "pre", label: "Login", locked: false, onPress: goToLogin },
+    { key: "dashboard", group: "post", label: "Dashboard", locked: !everRegistered, onPress: () => goToDashboardDestination(null) },
+    { key: "gbank", group: "post", label: "Gloobal Bank", locked: !everRegistered, onPress: () => goToDashboardDestination("bank") },
+    { key: "gcoin", group: "post", label: "Gloobal Coin", locked: !everRegistered, onPress: () => goToDashboardDestination("coin") },
+    { key: "send", group: "post", label: "Send Money", locked: !everRegistered, onPress: () => goToDashboardDestination("send") },
+    { key: "assets", group: "post", label: "My Assets", locked: !everRegistered, onPress: () => goToDashboardDestination("assets") },
+    { key: "paylater", group: "post", label: "PayLater", locked: !everRegistered, onPress: () => goToDashboardDestination("paylater") },
+    { key: "history", group: "post", label: "Transaction History", locked: !everRegistered, onPress: () => goToDashboardDestination("history") },
+    { key: "coverage", group: "post", label: "Gloobal Coverage", locked: !everRegistered, onPress: () => goToDashboardDestination("coverage") },
+    { key: "aboutus", group: "post", label: "About Us", locked: !everRegistered, onPress: () => goToDashboardDestination("aboutus") }
+  ];
   const effectiveLoginCountry = loginMobileCountry || dialCountry;
   const [loginMinLen, loginMaxLen] = mobileDigitRange(effectiveLoginCountry.iso);
   const loginMobileComplete = loginMobileBuffer.length >= loginMinLen;
@@ -2180,6 +2378,8 @@ function GloobalId() {
     myName={documentedName}
     openHistoryDirection={dashboardHistoryDirection}
     onConsumeOpenHistory={() => setDashboardHistoryDirection(null)}
+    deepLinkTarget={dashboardDeepLink}
+    onConsumeDeepLink={() => setDashboardDeepLink(null)}
     pendingOpenMyShare={pendingOpenMyShare}
     onConsumePendingMyShare={() => setPendingOpenMyShare(false)}
     profilePhoto={profilePhoto}
@@ -2571,6 +2771,7 @@ function GloobalId() {
     countries={ALL_COUNTRIES}
     search={countrySearch}
     onSearch={setCountrySearch}
+    selectedIso={dialCountry.iso}
     onSelect={(c) => {
       setDialCountry(c);
       setShowPicker(false);
@@ -2585,6 +2786,7 @@ function GloobalId() {
     countries={ALL_COUNTRIES}
     search={loginCountrySearch}
     onSearch={setLoginCountrySearch}
+    selectedIso={(loginMobileCountry || dialCountry).iso}
     onSelect={(c) => {
       setLoginMobileCountry(c);
       setLoginMobileBuffer("");
@@ -2698,6 +2900,6 @@ function GloobalId() {
       boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
       pointerEvents: "none"
     }}
-  >{rootToast}</div>}</div>;
+  >{rootToast}</div>}<AppMapLauncher entries={appMapEntries} onLockedPress={handleAppMapLockedPress} /></div>;
 }
 

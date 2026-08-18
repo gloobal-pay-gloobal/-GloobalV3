@@ -155,22 +155,20 @@ function ProductScreenHeader({ title, onBack, onAction, actionLabel }) {
   ><ServiceUsers size={17} color={T.accent} /></button>}</div>;
 }
 
-// The hero: the Gloobal logo in white on a large coloured circle. The
-// colour is the app-wide flip colour the caller is already cycling (the
-// same one behind the dial pad and GH Score's corner circle), passed in
-// rather than picked here so all of them change together.
+// The hero: "our logo" on the Bank and Coin screens, standing on its own
+// with nothing else on the circle — the same standalone role the launch
+// splash plays at app open. Bug fix: this used to be a static image (the
+// real mark, always) inside a circle that only ever changed background
+// colour, while the splash next to it was a living box flipping between
+// the logo and the 8 dial-pad symbols — two different things calling
+// themselves "the logo." They're now the same component (LivingLogoBox,
+// in flipIcons.jsx, itself built on the splash's own LivingLogoBoxVisual):
+// one definition of the logo, used identically everywhere it stands alone
+// as the app's brand mark. `color` is unused now — the box always renders
+// the fixed brand gradient the splash uses, rather than the separate
+// app-wide flip colour this circle used to cycle through — but the prop is
+// kept so neither call site (GloobalBankScreen, GloobalCoinScreen) needs
+// to change.
 function ProductScreenHero({ color }) {
-  return <div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}><div
-    style={{
-      width: 168,
-      height: 168,
-      borderRadius: "50%",
-      background: color,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      boxShadow: `0 10px 28px ${color}40`,
-      transition: "background 0.4s ease, box-shadow 0.4s ease"
-    }}
-  ><img src={G_LOGO_DATA_URI} alt="" style={{ width: 138, height: 138, objectFit: "contain", filter: "brightness(0) invert(1)" }} /></div></div>;
+  return <div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}><LivingLogoBox size={168} shape="circle" /></div>;
 }
