@@ -1,0 +1,27 @@
+{
+  "name": "gloobal-database",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node tests/auth-and-access.test.mjs && node tests/transfer-atomicity.test.mjs && node tests/coin-supply-invariant.test.mjs",
+    "test:auth": "node tests/auth-and-access.test.mjs",
+    "test:atomicity": "node tests/transfer-atomicity.test.mjs",
+    "test:coin": "node tests/coin-supply-invariant.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.1",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mongoose": "^9.6.3"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
