@@ -587,9 +587,30 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     }
     setSearchBusy(false);
     const grouped = mobileBuffer.replace(/(\d{3})(?=\d)/g, "$1 ");
+    // Who this money is actually going to lives in `user` — their OWN
+    // registered country — not `c` (effectiveSearchCountry), which is just
+    // whichever country flag the sender happened to have selected/typed
+    // from while dialling. Before this fix, a resolved receiver always
+    // inherited the SENDER's country, flag and currency: someone in India
+    // searching up a Gloobal ID belonging to a person in the US saw the
+    // amount dial in rupees under an Indian flag — the right person, but
+    // the wrong currency and flag entirely, and (via `convert` below) the
+    // wrong amount if that ever got sent.
+    //
+    // Tries the backend's own countryIso first — the same field
+    // getPlatformUserCountByCountry above groups registrations by, so it's
+    // already load-bearing elsewhere in this file — then falls back to
+    // reading it off their E.164 mobile number with the same dial-code
+    // matching the contact picker uses (matchCountryFromContactNumber),
+    // and only then falls back to `c` for the rare account with neither
+    // signal.
+    const recipientCountry =
+      ALL_COUNTRIES.find((country) => country.iso === user.countryIso) ||
+      matchCountryFromContactNumber(user.mobileNumber).country ||
+      c;
     setBottom({
-      country: c.name,
-      flag: c.flag,
+      country: recipientCountry.name,
+      flag: recipientCountry.flag,
       // The recipient's CURRENT registered ID, as the backend holds it —
       // not what was typed. Someone paying an ID that has since been
       // changed is shown, and pays, the ID the account actually has now.
@@ -599,7 +620,7 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
       // just the number is not a name worth showing.
       name: user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User",
       phone: maskMobileNumber(user.mobileNumber) || (searchMode === "mobile" ? `${c.dialCode} ${grouped}` : ""),
-      currency: COUNTRY_CURRENCY[c.iso] || "USD",
+      currency: COUNTRY_CURRENCY[recipientCountry.iso] || "USD",
       // The receiver's real rate off their own account, not a random one.
       //
       // Converted to a percent here, at the boundary. The backend stores and

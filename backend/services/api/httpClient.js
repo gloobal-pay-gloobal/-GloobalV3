@@ -87,6 +87,19 @@ class GloobalApiError extends Error {
   }
 }
 
+// Fired the moment a call discovers its bearer token no longer works (see
+// the 401 branch in gloobalApiRequest below) — a dead Render backend
+// restart regenerating AUTH_TOKEN_SECRET, a genuine expiry, whatever the
+// cause. Before this, that 401 just cleared the token and surfaced as
+// whatever inline error text the calling screen happened to show (e.g.
+// Send Money's search field silently printing "Sign in to continue" and
+// leaving a disabled Search button, with no way back to an actual sign-in
+// screen). App.jsx listens for this at the top level and redirects to
+// Login instead, since a cleared token is never something a single screen
+// can recover from on its own — the whole app is signed out at that point,
+// whether or not any particular screen realizes it yet.
+var GLOOBAL_SESSION_EXPIRED_EVENT = "gloobal:sessionExpired";
+
 // status 0 means the request never got an answer at all — a timeout, an
 // offline moment, or a cold start still booting. Callers treat that very
 // differently from a real rejection: it must not burn an attempts budget
@@ -134,6 +147,9 @@ async function gloobalApiRequest(method, path, body, options) {
       // flow instead of looping on failures it cannot explain.
       if (res.status === 401 && authToken && typeof gloobalAuthTokenClear === "function") {
         gloobalAuthTokenClear();
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(GLOOBAL_SESSION_EXPIRED_EVENT));
+        }
       }
       const message = (parsed && parsed.message) || `Request to ${path} failed with ${res.status}`;
       throw new GloobalApiError(message, res.status, parsed);
