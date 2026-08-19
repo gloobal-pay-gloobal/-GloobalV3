@@ -731,6 +731,30 @@ function GloobalId() {
     // dependency array rather than hoisted above this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, pendingMapDestination]);
+  // GLOOBAL_SESSION_EXPIRED_EVENT fires (see httpClient.js) the moment any
+  // authenticated call comes back 401 and its bearer token gets dropped —
+  // a Render restart invalidating the token, a genuine expiry, whatever
+  // the cause. This is the one place that reacts to it: closing whatever
+  // App.jsx-level overlay was open (Send Money, Add Bank, Coverage — any
+  // of which could be the screen that was mid-call when the token died),
+  // dropping any dashboard deep-link that no longer applies, and sending
+  // the person to Login rather than leaving them stuck on a screen that's
+  // quietly stopped working. goToLogin/showToast are defined further down
+  // this component but are already assigned by the time this effect's
+  // callback actually runs (mount, not render), same as
+  // applyDashboardDestination above.
+  useEffect15(() => {
+    const onSessionExpired = () => {
+      setActiveScreen(null);
+      setDashboardDeepLink(null);
+      setPendingMapDestination(null);
+      showToast("Your session expired. Please sign in again.");
+      goToLogin();
+    };
+    window.addEventListener(GLOOBAL_SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(GLOOBAL_SESSION_EXPIRED_EVENT, onSessionExpired);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [pendingOpenMyShare, setPendingOpenMyShare] = useState19(false);
   const [secureIdRevealed, setSecureIdRevealed] = useState19(false);
   const [referralRevealed, setReferralRevealed] = useState19(false);
