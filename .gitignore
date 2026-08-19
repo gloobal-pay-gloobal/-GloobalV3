@@ -33,3 +33,6 @@ memory.txt
 
 # Netlify CLI/MCP deploy state — machine-local, never committed.
 .netlify/
+
+server/node_modules/
+server/.env
