@@ -36,3 +36,15 @@ memory.txt
 
 server/node_modules/
 server/.env
+
+# --- Developer tooling (tools/) ---
+# Both mailers read their credentials at run time. The *.example files are
+# committed; the real ones never are.
+tools/email/secret.txt
+tools/email/report-mailer/.env
+tools/email/report-mailer/node_modules/
+tools/email/__pycache__/
+# Generated report output, written next to the Python mailer when it runs.
+tools/email/report.md
+tools/email/report.html
+tools/email/progress-report.txt

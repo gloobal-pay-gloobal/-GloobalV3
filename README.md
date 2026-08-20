@@ -71,13 +71,24 @@ frontend/
 └── __artifactEntry.jsx  # Artifact wrapper with splash screen
 ```
 
+### `server/` — the real API
+
+Express 5 + Mongoose against MongoDB Atlas, deployed to Render. Not to be
+confused with `backend/` above: `backend/` is a domain simulation that runs
+in the browser as part of the bundle, `server/` is the production backend
+with a database behind it. They are deliberately separate and must not be
+merged. See `docs/deployment/README.md`.
+
 ### Other Directories
 
 - `gloobal-essentials-preview/` — Vite + React dev server for previewing the app
-- `financial-principles-tests/` — 166 domain-layer unit tests (Node.js)
-- `docs/` — Architecture documentation
+- `financial-principles-tests/` — domain-layer unit tests (Node.js)
+- `tools/` — developer tooling: bundle diagnostics, API checks, mailers.
+  Nothing here ships. See `tools/README.md`.
+- `docs/` — architecture, deployment, operations, and session handoffs
+- `archive/` — reference copies of superseded code; nothing builds from it
 - `_trash/` — the retired pre-split monolith and its extraction manifest.
-  Nothing uses them; safe to delete. See `_trash/README.md`.
+  Gitignored. Nothing uses them; safe to delete. See `_trash/README.md`.
 
 ## How the Build Works
 
@@ -135,7 +146,7 @@ build used, not a new one:
 |---|---|
 | API | `https://gloobal-pay.onrender.com` (Express 5, deployed on Render) |
 | Database | MongoDB Atlas, reached **only** through that API |
-| Source | `D:\Desktop\Gloobal\Backend` |
+| Source | `server/` in this repository |
 
 The client lives in `backend/services/api/`:
 
@@ -198,14 +209,19 @@ remains as the projection the UI reads and the 166 tests cover. It is a
 mirror of server truth for payments, not a second source of it.
 
 ### Crash Diagnostics
-Render-time checks that do not need a browser — see
-`gloobal-essentials-preview/tools/README.md`:
+Render-time checks that do not need a browser. They moved out of
+`gloobal-essentials-preview/tools/` and are now run from the repo root —
+see `tools/README.md`:
 ```bash
-cd gloobal-essentials-preview
-node tools/scan-undeclared.mjs   # identifiers referenced but never declared
-node tools/probe-screens.mjs     # screens x 194 countries + edge cases
-node tools/probe-stages.mjs      # all 10 registration/login stages
+node tools/frontend/scan-undeclared.mjs   # identifiers referenced but never declared
+node tools/frontend/probe-screens.mjs     # screens x 194 countries + edge cases
+node tools/frontend/probe-panels.mjs      # panel rendering
+node tools/frontend/probe-stages.mjs      # all 10 registration/login stages
+node tools/backend/check-backend.mjs      # live API contract
 ```
+They still read `gloobal-essentials-preview/src/GloobalApp.jsx` and still
+resolve their dependencies from that project, so it needs `npm install`
+first.
 
 ## Deployment
 

@@ -1,0 +1,4333 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import globalIdLogo from "../../assets/globalid-logo.png";
+import {
+  Search,
+  User,
+  Copy,
+  X,
+  ChevronRight,
+  ArrowLeft,
+  Home,
+  Users2,
+  Share2,
+  Gift,
+  Store,
+  Info,
+  Pencil,
+  Trophy,
+  Camera,
+  Fingerprint,
+} from "lucide-react";
+import { startAuthentication } from "@simplewebauthn/browser";
+import { CardAmbientField, DashboardAmbientBg, SendMoneyAmbientBg } from "../backgrounds/FinancialAmbient";
+import { POSITION_COLORS, SymbolChipRow } from "../common/CodeEntry";
+import { PhoneDialPad, SymbolDialPad } from "../common/DialPads";
+import { FlagEmoji } from "../common/FlagComponents";
+import { IdSuggestionsPanel } from "../common/GapPanels";
+import { ChevronRightIcon, EyeIcon, HomeTabIcon, LogoutIcon, ProfileTabIcon, RotatingGlobeIcon, ServiceLock } from "../common/Icons";
+import { BILL_ACTIONS, DASHBOARD_ACTIONS, PROFILE_ROWS } from "../../constants/dashboardData";
+import {
+  changeSymbolId,
+  checkSymbolAvailability,
+  getProfile,
+  getReferrals,
+  passkeyAuthOptions,
+  passkeyAuthVerify,
+  passkeyStatus,
+  getTransactionSummary,
+  verifyPin,
+} from "../../services/api/authApi";
+import { getPayLater } from "../../services/api/assetsApi";
+import { MyAssetsScreen } from "./MyAssetsScreen";
+import { MyShareScreen } from "./MyShareScreen";
+import { GHScoreScreen } from "../profile/GHScoreScreen";
+import { generateIdSuggestions } from "../../lib/idSuggestions";
+import { T } from "../../styles/theme";
+import { Plane, Building2, TrainFront, Bus, Car, Ship, RefreshCw, Coins, CreditCard, Landmark, Smartphone, Zap, ChevronUp, ChevronDown, History, ArrowUp, ArrowDown, ArrowDownLeft, ArrowUpRight, RotateCw, Check, Sprout } from "lucide-react";
+import { symbolForCountry } from "../../constants/finance";
+import { nextIdentityMode, IDENTITY_DISPLAY_LABEL, identityDisplayValue } from "../../constants/identity";
+
+// Where a referral link points.
+//
+// This used to be hardcoded to https://gloobal.id, which does not resolve —
+// the domain is not registered, so every shared link was dead on arrival no
+// matter how correctly the Gloobal ID inside it was encoded. That is why
+// referrals still read as "broken" after the encoding fix landed: the
+// encoding was necessary and not sufficient.
+//
+// The default is now the backend that actually serves GET /r/:symbolId
+// today, so a shared link resolves and redirects into the app for real.
+// Point VITE_REFERRAL_LINK_BASE at https://gloobal.id the moment that
+// domain exists and is aimed at the backend — nothing else has to change.
+const RAW_REFERRAL_BASE = import.meta.env?.VITE_REFERRAL_LINK_BASE || "";
+const REFERRAL_LINK_BASE = (/^https?:\/\//i.test(RAW_REFERRAL_BASE) ? RAW_REFERRAL_BASE : "https://gloobal-pay.onrender.com").replace(/\/+$/, "");
+
+// "22 Jul 2026" — the join date on a referral row. Built from explicit
+// parts rather than toLocaleDateString so the order and month spelling are
+// the same on every device, whatever locale it is set to. An unparseable
+// or missing date renders as an em dash instead of "Invalid Date".
+const JOINED_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function formatJoinedDate(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "—";
+  return `${String(date.getUTCDate()).padStart(2, "0")} ${JOINED_MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+// A lightweight, dependency-free "QR code" look for the receiving side of
+// a transfer (Accept Rent, and anywhere else a scannable ID is shown). The
+// pattern is deterministic — the same Gloobal ID always draws the same
+// dots — and includes the three corner "finder" squares every real QR
+// code has, so it reads unmistakably as a scannable code at a glance.
+// This is a prototype visual standing in for a live scannable encoding,
+// the same way the rest of the app's identifiers are demo data.
+function MockQRCode({ value, size = 176 }) {
+  const GRID = 21; // classic QR "Version 1" module count
+  const FINDER = 7; // finder squares are 7x7 modules
+  const cell = size / GRID;
+
+  const seed = useMemo(() => {
+    let h = 0;
+    const s = value || "gloobal";
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h;
+  }, [value]);
+
+  const finderCorners = [
+    [0, 0],
+    [GRID - FINDER, 0],
+    [0, GRID - FINDER],
+  ];
+
+  const finderCell = (x, y, cx, cy) => {
+    const lx = x - cx;
+    const ly = y - cy;
+    const onOuter = lx === 0 || lx === FINDER - 1 || ly === 0 || ly === FINDER - 1;
+    const onInner = lx >= 2 && lx <= 4 && ly >= 2 && ly <= 4;
+    return onOuter || onInner;
+  };
+
+  const cells = [];
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      const finderCorner = finderCorners.find(([cx, cy]) => x >= cx && x < cx + FINDER && y >= cy && y < cy + FINDER);
+      const dark = finderCorner
+        ? finderCell(x, y, finderCorner[0], finderCorner[1])
+        : ((x * 92821 + y * 68917 + seed) >>> 0) % 5 < 2; // ~40% fill reads like a real QR
+      if (dark) {
+        cells.push(<rect key={`${x}-${y}`} x={x * cell} y={y * cell} width={cell} height={cell} fill="#14122B" />);
+      }
+    }
+  }
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block", borderRadius: 12 }} role="img" aria-label="Scan to send">
+      <rect x={0} y={0} width={size} height={size} fill="#fff" rx={12} />
+      {cells}
+    </svg>
+  );
+}
+
+// Travel — its own icon group inside the More sheet, since it covers
+// enough sub-categories (flights, hotels, ground transport...) to need a
+// small grid of its own rather than a single row.
+const TRAVEL_ACTIONS = [
+  { key: "flights", label: "Flights", Icon: Plane },
+  { key: "hotels", label: "Hotels", Icon: Building2 },
+  { key: "trains", label: "Trains", Icon: TrainFront },
+  { key: "buses", label: "Buses", Icon: Bus },
+  { key: "carRental", label: "Car Rental", Icon: Car },
+  { key: "cruises", label: "Cruises", Icon: Ship },
+];
+
+// Top businesses shown in the More sheet, below the pinned Recharge /
+// Electricity / Rent / Travel shortcuts. Tapping any of these — or a
+// Travel option above — opens the same lightweight, functional "Pay"
+// sheet the Send flow uses at its core: amount in, Pay button, done.
+const TOP_BUSINESSES = [
+  { key: "amazon", label: "Amazon", chip: "AZ" },
+  { key: "walmart", label: "Walmart", chip: "WM" },
+  { key: "uber", label: "Uber", chip: "UB" },
+  { key: "uberEats", label: "Uber Eats", chip: "UE" },
+  { key: "starbucks", label: "Starbucks", chip: "SB" },
+  { key: "mcdonalds", label: "McDonald's", chip: "MC" },
+  { key: "target", label: "Target", chip: "TG" },
+  { key: "ikea", label: "IKEA", chip: "IK" },
+  { key: "zara", label: "Zara", chip: "ZA" },
+  { key: "appleStore", label: "Apple Store", chip: "AP" },
+];
+
+// Mobile operators per country, keyed by ISO-2 the same way the banks
+// data is. Only the person's own country's list is ever shown. Every row
+// is locked (right-side lock) until live recharge APIs are connected —
+// the list itself is real so the UI is ready the day the APIs are.
+const TELECOMS_BY_COUNTRY = {
+  IN: ["Jio", "Airtel", "Vi (Vodafone Idea)", "BSNL", "MTNL"],
+  US: ["Verizon", "AT&T", "T-Mobile", "Mint Mobile", "Cricket Wireless", "Boost Mobile"],
+  GB: ["EE", "O2", "Vodafone UK", "Three", "giffgaff", "Sky Mobile"],
+  PK: ["Jazz", "Zong", "Telenor Pakistan", "Ufone", "SCOM"],
+  CA: ["Rogers", "Bell", "Telus", "Freedom Mobile", "Fido"],
+  DE: ["Deutsche Telekom", "Vodafone Germany", "O2 Germany", "1&1"],
+  FR: ["Orange", "SFR", "Bouygues Telecom", "Free Mobile"],
+  IT: ["TIM", "Vodafone Italy", "WindTre", "Iliad"],
+  ES: ["Movistar", "Vodafone Spain", "Orange Spain", "Yoigo", "Digi"],
+  BR: ["Vivo", "Claro", "TIM Brasil", "Oi"],
+  MX: ["Telcel", "Movistar México", "AT&T México"],
+  AE: ["e& (Etisalat)", "du", "Virgin Mobile UAE"],
+  SA: ["STC", "Mobily", "Zain"],
+  CN: ["China Mobile", "China Unicom", "China Telecom"],
+  JP: ["NTT Docomo", "au (KDDI)", "SoftBank", "Rakuten Mobile"],
+  KR: ["SK Telecom", "KT", "LG U+"],
+  RU: ["MTS", "Beeline", "MegaFon", "Tele2"],
+  AU: ["Telstra", "Optus", "Vodafone Australia", "TPG"],
+  ID: ["Telkomsel", "Indosat Ooredoo", "XL Axiata", "Smartfren"],
+  PH: ["Globe", "Smart", "DITO"],
+  BD: ["Grameenphone", "Robi", "Banglalink", "Teletalk"],
+  NG: ["MTN Nigeria", "Airtel Nigeria", "Glo", "9mobile"],
+  ZA: ["Vodacom", "MTN South Africa", "Cell C", "Telkom"],
+  EG: ["Vodafone Egypt", "Orange Egypt", "Etisalat Misr", "WE"],
+  VN: ["Viettel", "Vinaphone", "MobiFone"],
+  TH: ["AIS", "TrueMove H", "dtac"],
+  MY: ["Maxis", "CelcomDigi", "U Mobile", "unifi Mobile"],
+  SG: ["Singtel", "StarHub", "M1", "SIMBA"],
+  TR: ["Turkcell", "Vodafone Türkiye", "Türk Telekom"],
+  NL: ["KPN", "VodafoneZiggo", "Odido"],
+  CH: ["Swisscom", "Sunrise", "Salt"],
+};
+
+// Electricity operators per country, same pattern and same ISO-2 keys as
+// TELECOMS_BY_COUNTRY. Only the person's own country's list is shown, and
+// every row is locked (right-side lock) until live utility-payment APIs
+// are connected.
+const ELECTRICITY_BY_COUNTRY = {
+  IN: ["Tata Power", "Adani Electricity", "BSES Rajdhani", "BSES Yamuna", "Torrent Power"],
+  US: ["Con Edison", "PG&E", "Duke Energy", "Southern Company", "Exelon", "Dominion Energy"],
+  GB: ["British Gas", "EDF Energy", "E.ON Next", "Octopus Energy", "Scottish Power", "OVO Energy"],
+  PK: ["K-Electric", "LESCO", "IESCO", "FESCO", "GEPCO"],
+  CA: ["Hydro One", "BC Hydro", "Hydro-Québec", "Toronto Hydro"],
+  DE: ["E.ON", "RWE", "EnBW", "Vattenfall"],
+  FR: ["EDF", "Engie", "TotalEnergies"],
+  IT: ["Enel", "Eni Plenitude", "A2A"],
+  ES: ["Iberdrola", "Endesa", "Naturgy"],
+  BR: ["Enel Brasil", "CPFL Energia", "Light", "Cemig"],
+  MX: ["CFE"],
+  AE: ["DEWA", "ADDC (EtihadWE)", "SEWA"],
+  SA: ["Saudi Electricity Company"],
+  CN: ["State Grid Corporation", "China Southern Power Grid"],
+  JP: ["TEPCO", "Kansai Electric Power", "Chubu Electric Power"],
+  KR: ["KEPCO"],
+  RU: ["Rosseti", "Inter RAO"],
+  AU: ["AGL Energy", "Origin Energy", "EnergyAustralia"],
+  ID: ["PLN"],
+  PH: ["Meralco"],
+  BD: ["DESCO", "DPDC", "BPDB"],
+  NG: ["Ikeja Electric", "Eko Electricity", "AEDC"],
+  ZA: ["Eskom", "City Power Johannesburg"],
+  EG: ["Egyptian Electricity Holding Company"],
+  VN: ["EVN (Vietnam Electricity)"],
+  TH: ["MEA", "PEA"],
+  MY: ["Tenaga Nasional (TNB)"],
+  SG: ["SP Group"],
+  TR: ["TEDAŞ", "Enerjisa"],
+  NL: ["Essent", "Vattenfall NL", "Eneco"],
+  CH: ["Swissgrid", "BKW", "EWZ"],
+};
+
+// --- Gloobal ID history -----------------------------------------------------
+// Every ID this account has used before, with the moment it was replaced.
+// Kept against the *current* ID, so the record follows a rename instead of
+// being orphaned under the old key. The backend keeps its own copy
+// (User.symbolIdHistory); these two are merged on read so a history recorded
+// on another device still shows up here.
+const idHistoryKey = (symbolId) => `gloobal.idHistory.${symbolId}`;
+
+// An entry is one of two things:
+//   action "created" — the first ID this account ever had. No replacedBy.
+//   action "changed" — an ID that was renamed away from, and what to.
+// The timestamp field is `createdAt`. Entries written before this existed
+// carry `changedAt` instead and no action, so both are read through the
+// two accessors below rather than touched directly anywhere else.
+export function idHistoryAt(entry) {
+  return entry?.createdAt || entry?.changedAt || null;
+}
+
+export function idHistoryAction(entry) {
+  return entry?.action === "created" ? "created" : "changed";
+}
+
+function readIdHistory(symbolId) {
+  if (!symbolId) return [];
+  try {
+    const raw = window.localStorage.getItem(idHistoryKey(symbolId));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Union of two history lists, newest first, first occurrence winning.
+ *
+ * A rename is deduped on (symbolId, action, timestamp) — the same ID can
+ * legitimately be renamed away from more than once if it is later reclaimed.
+ * A *creation* is deduped on (symbolId, created) with the timestamp left
+ * out, because an ID is only ever created once. Two records of that one
+ * event can disagree by milliseconds — the backend stamps the registration
+ * write, the local fallback reads the account's createdAt — and without
+ * this they would render as two "Created" rows for the same moment.
+ */
+function mergeIdHistory(a, b) {
+  const seen = new Set();
+  return [...(a || []), ...(b || [])]
+    .filter((entry) => entry && entry.symbolId)
+    .filter((entry) => {
+      const action = idHistoryAction(entry);
+      const key =
+        action === "created"
+          ? `${entry.symbolId}@created`
+          : `${entry.symbolId}@changed@${idHistoryAt(entry)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((x, y) => new Date(idHistoryAt(y) || 0) - new Date(idHistoryAt(x) || 0));
+}
+
+/** Records `oldSymbolId` as replaced by `newSymbolId`, moving the whole
+ * history onto the new ID's key. Returns the updated list. */
+function recordIdChange(oldSymbolId, newSymbolId) {
+  const now = new Date().toISOString();
+  const entry = {
+    symbolId: oldSymbolId,
+    action: "changed",
+    createdAt: now,
+    // Written alongside createdAt so a build of the app from before this
+    // change still reads the entry rather than showing it undated.
+    changedAt: now,
+    replacedBy: newSymbolId,
+  };
+  const next = mergeIdHistory([entry], readIdHistory(oldSymbolId));
+  try {
+    window.localStorage.setItem(idHistoryKey(newSymbolId), JSON.stringify(next));
+    window.localStorage.removeItem(idHistoryKey(oldSymbolId));
+  } catch {
+    // storage unavailable — the in-memory list still renders this session
+  }
+  return next;
+}
+
+/**
+ * Writes the "created" entry for an account's first Gloobal ID, if one
+ * isn't already recorded.
+ *
+ * Until now only *changes* were tracked, so the history of an account that
+ * had never been renamed was empty and the original ID — the one the
+ * founder specifically asked to see dated — appeared nowhere. Idempotent:
+ * called on every dashboard mount, writes at most once per account.
+ */
+export function ensureIdCreatedEntry(symbolId, createdAt) {
+  if (!symbolId || !createdAt) return null;
+  const existing = readIdHistory(symbolId);
+  if (existing.some((entry) => idHistoryAction(entry) === "created")) return null;
+  const stamp = new Date(createdAt);
+  if (Number.isNaN(stamp.getTime())) return null;
+  const entry = {
+    symbolId,
+    action: "created",
+    createdAt: stamp.toISOString(),
+    replacedBy: null,
+  };
+  try {
+    window.localStorage.setItem(idHistoryKey(symbolId), JSON.stringify(mergeIdHistory([entry], existing)));
+  } catch {
+    // storage unavailable — the entry still merges into this session's list
+  }
+  return entry;
+}
+
+// Everything this app keeps locally is filed under the account's Gloobal ID,
+// which is exactly the thing a rename changes. Without this, changing your ID
+// silently wipes your GH Score answers and your profile photo — same person,
+// same device, but the app looks under a key nobody wrote to. Renaming carries
+// them across.
+//
+// Anything new that gets filed under a symbolId belongs in this list. The GH
+// Score port added `gloobal.ghColors` and it was missed here first time round,
+// so a rename kept somebody's check-in answers and threw away the colours
+// they had picked for them.
+const ID_SCOPED_LOCAL_KEYS = ["gloobal.ghAnswers", "gloobal.ghColors", "gloobal.profilePhoto"];
+
+function migrateIdScopedStorage(oldSymbolId, newSymbolId) {
+  if (!oldSymbolId || !newSymbolId || oldSymbolId === newSymbolId) return;
+  for (const prefix of ID_SCOPED_LOCAL_KEYS) {
+    try {
+      const value = window.localStorage.getItem(`${prefix}.${oldSymbolId}`);
+      if (value === null) continue;
+      window.localStorage.setItem(`${prefix}.${newSymbolId}`, value);
+      window.localStorage.removeItem(`${prefix}.${oldSymbolId}`);
+    } catch {
+      // storage unavailable — nothing to carry across
+    }
+  }
+}
+
+// "22 Jul 2026 · 14:05:33" — the timestamp beside a Gloobal ID in the
+// history sheet. Built from explicit parts for the same reason
+// formatJoinedDate is.
+//
+// Seconds are shown, not rounded away. Two IDs created or replaced in the
+// same minute are indistinguishable without them, and a rename is exactly
+// the kind of thing someone does twice in a row while deciding.
+function formatIdChangedAt(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "—";
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mon = JOINED_MONTHS[date.getMonth()];
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${dd} ${mon} ${date.getFullYear()} · ${hh}:${mm}:${ss}`;
+}
+
+function AccountsTabIcon({ active }) {
+  const c = active ? "#7c3aed" : "#9a94ad";
+  return (
+    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke={c} strokeWidth="2">
+      <rect x="3" y="6" width="18" height="13" rx="2.5" />
+      <path d="M3 10.5h18" strokeLinecap="round" />
+      <path d="M7 15h4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Basic time filters offered on the Profile's Paid / Received panels.
+// Demo data only spans Jun–Jul, so this is a simple month match rather
+// than real date-range math — enough to make the filter feel functional.
+const MONEY_FILTERS = ["All", "This Month", "Last Month"];
+
+// Rows carry the real transaction timestamp in `at`, so the period filter is
+// resolved against the actual current month rather than hard-coded month
+// names — which only worked while the rows were fixed demo data.
+function filterMoneyRows(rows, filter) {
+  if (filter === "All") return rows;
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth() - (filter === "Last Month" ? 1 : 0), 1);
+  return rows.filter((r) => {
+    if (!r.at) return false;
+    const d = new Date(r.at);
+    return d.getFullYear() === target.getFullYear() && d.getMonth() === target.getMonth();
+  });
+}
+
+// Maps one GET /api/transactions/history entry onto the shape the Profile
+// money panels and history sheets render. The backend already computes
+// `direction` and `counterparty` relative to whoever asked, so no
+// sender/receiver comparison is needed here. It has no country for the
+// counterparty, hence the neutral globe rather than a guessed flag.
+function toMoneyRow(txn) {
+  const when = txn.createdAt ? new Date(txn.createdAt) : null;
+  return {
+    name: txn.counterparty?.fullName || txn.counterparty?.symbolId || "Gloobal User",
+    date: when ? when.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+    at: txn.createdAt || null,
+    amount: Number(txn.amount) || 0,
+    flag: "🌐",
+    status: txn.direction === "sent" ? txn.status || "completed" : "received",
+  };
+}
+
+// Send Money / Receive Money task histories — module-level (not tied to
+// any one screen's state) since they're read from four places: the
+// History icon on the Send Money screen, the History icon on the Receive
+// sheet, and the Profile's separate Paid and Received panels. Demo data
+// only (prototype stage); same shape either direction so both lists render
+// identically.
+// Empty until GET /api/transactions/history answers — a brand-new account
+// genuinely has no history, and the money panels already render a
+// "Nothing here yet" state for that.
+const NO_MONEY_ROWS = [];
+
+// Languages offered in the profile's basic settings. Purely a client-side
+// selection for now (prototype stage) — picking one updates the selected
+// state so the UI behaves like the real thing, without any i18n plumbing
+// behind it yet. Currency is not offered here: it follows the account's
+// registration country (see symbolForCountry).
+const PROFILE_LANGUAGES = ["English", "Español", "Français", "العربية", "हिन्दी", "中文"];
+
+// Tiny inline bar chart for the Profile's Paid / Received panels — no
+// charting dependency, just SVG rects sized against the row amounts, so
+// it renders instantly inside this single-file component. Tapping a bar
+// pins that transaction's name/date/amount above the chart (tap again to
+// clear it) — the same tap-to-inspect pattern as the dashboard's mini
+// chart, plus a dashed average line so each bar reads against a baseline
+// rather than only against its neighbors.
+function ProfileMoneyChart({ rows, color }) {
+  const [selected, setSelected] = useState(null); // tapped bar index, or null
+  const max = Math.max(1, ...rows.map((r) => r.amount));
+  const avg = rows.length ? rows.reduce((s, r) => s + r.amount, 0) / rows.length : 0;
+  const barW = 26;
+  const gap = 14;
+  const chartH = 84;
+  const width = rows.length > 0 ? rows.length * (barW + gap) : 100;
+  const chartWidth = Math.max(width, 100);
+  const avgY = chartH - (avg / max) * chartH;
+
+  return (
+    <div>
+      <div style={{ minHeight: 16, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {selected !== null && rows[selected] ? (
+          <>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {rows[selected].name}
+            </span>
+            <span style={{ fontSize: 11.5, fontWeight: 800, color, flexShrink: 0, marginLeft: 8 }}>
+              {rows[selected].date} · {rows[selected].amount.toFixed(2)}
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint }}>Tap a bar for details</span>
+        )}
+      </div>
+      <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <svg width={chartWidth} height={chartH + 22} style={{ display: "block" }}>
+          {rows.length > 1 && (
+            <line x1={0} y1={avgY} x2={chartWidth} y2={avgY} stroke={T.inkFaint} strokeWidth={1} strokeDasharray="3,4" opacity={0.5} />
+          )}
+          {rows.map((r, i) => {
+            const h = Math.max(4, (r.amount / max) * chartH);
+            const x = i * (barW + gap) + gap / 2;
+            const isSelected = selected === i;
+            return (
+              <g
+                key={`${r.name}-${r.date}`}
+                onClick={() => setSelected((s) => (s === i ? null : i))}
+                style={{ cursor: "pointer" }}
+              >
+                <rect
+                  x={x}
+                  y={chartH - h}
+                  width={barW}
+                  height={h}
+                  rx={7}
+                  fill={color}
+                  opacity={selected === null ? 0.85 : isSelected ? 1 : 0.35}
+                />
+                {isSelected && (
+                  <rect x={x - 2} y={chartH - h - 2} width={barW + 4} height={h + 4} rx={8} fill="none" stroke={color} strokeWidth={1.5} />
+                )}
+                <text
+                  x={x + barW / 2}
+                  y={chartH + 16}
+                  textAnchor="middle"
+                  fontSize="9.5"
+                  fontWeight="700"
+                  fill={isSelected ? T.ink : T.inkFaint}
+                >
+                  {r.date.split(" ")[1] || r.date}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// Shared layout for the Profile's Paid and Received panels — filter
+// chips, a mini bar chart, the transaction list, and a CTA button that
+// simply reuses the existing Send / Receive flows (no new flows needed).
+function ProfileMoneySection({ rows, filter, onFilterChange, color, chip, sign, ccy, ctaLabel, onCta, status = "ready", onRetry }) {
+  // Summary tiles above the chart — a proper glance at the filtered
+  // period instead of just the raw bars, which is what a bigger dedicated
+  // screen has the room for that the dashboard's mini chart doesn't.
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const avg = rows.length ? total / rows.length : 0;
+  const highest = rows.length ? Math.max(...rows.map((r) => r.amount)) : 0;
+
+  // Loading and error are shown instead of the list, not alongside it. A
+  // spinner over a stale list, or "Nothing yet" under a failed request,
+  // both state something about the account that isn't known to be true.
+  if (status === "loading" || status === "error") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "32px 16px", textAlign: "center" }}>
+          {status === "loading" ? (
+            <>
+              <span
+                data-testid="money-spinner"
+                aria-label="Loading transactions"
+                role="status"
+                style={{
+                  display: "inline-block", width: 22, height: 22, borderRadius: "50%",
+                  border: `2.5px solid ${T.line}`, borderTopColor: color,
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              <div style={{ marginTop: 12, fontSize: 12, fontWeight: 600, color: T.inkFaint }}>Loading transactions…</div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="v2-tap"
+              style={{ border: "none", background: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: T.inkSoft, padding: 0 }}
+            >
+              Could not load transactions. Tap to retry.
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", gap: 6, padding: 4, borderRadius: 999, background: T.surfaceAlt }}>
+        {MONEY_FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => onFilterChange(f)}
+            className="v2-tap"
+            style={{
+              flex: 1,
+              border: "none",
+              borderRadius: 999,
+              padding: "8px 0",
+              fontSize: 11.5,
+              fontWeight: 800,
+              cursor: "pointer",
+              color: filter === f ? "#fff" : T.inkSoft,
+              background: filter === f ? T.gradButton : "transparent",
+              transition: "background 0.18s ease, color 0.18s ease",
+            }}
+          >
+            {f}
+          </button>
+        ))}
+      </div>
+
+      {rows.length > 0 && (
+        <div style={{ display: "flex", gap: 8 }}>
+          {[
+            ["Total", total],
+            ["Average", avg],
+            ["Highest", highest],
+          ].map(([label, val]) => (
+            <div
+              key={label}
+              style={{ flex: 1, borderRadius: T.radiusMd, background: T.surface, boxShadow: T.shadowCard, padding: "10px 8px", textAlign: "center" }}
+            >
+              <div style={{ fontSize: 9, fontWeight: 700, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: T.ink, marginTop: 2 }}>{ccy}{val.toFixed(2)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 14px 8px" }}>
+        {rows.length === 0 ? (
+          <div style={{ padding: "20px 0", textAlign: "center", fontSize: 12, color: T.inkFaint }}>Nothing here yet</div>
+        ) : (
+          <ProfileMoneyChart rows={rows} color={color} />
+        )}
+      </div>
+
+      <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+        {rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", fontSize: 12, color: T.inkFaint }}>No transactions yet</div>
+        ) : (
+          rows.map((t, i) => (
+            <div
+              key={`${t.name}-${t.date}`}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+            >
+              <span
+                style={{
+                  width: 36, height: 36, borderRadius: 11, flexShrink: 0,
+                  background: chip, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17,
+                }}
+              >
+                {t.flag}
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 13.5, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+                <span style={{ display: "block", fontSize: 11, color: T.inkFaint, marginTop: 1 }}>{t.date}</span>
+              </span>
+              <span style={{ fontSize: 13.5, fontWeight: 800, color, flexShrink: 0 }}>
+                {sign}{ccy}{t.amount.toFixed(2)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <button
+        onClick={onCta}
+        className="v2-tap"
+        style={{ border: "none", borderRadius: T.radiusMd, padding: "14px 0", color: "#fff", fontSize: 13.5, fontWeight: 800, background: T.gradButton, boxShadow: "0 8px 20px rgba(124,58,237,0.32)", cursor: "pointer" }}
+      >
+        {ctaLabel}
+      </button>
+    </div>
+  );
+}
+
+// A minimal on/off switch for the profile's Security / Notifications
+// sheets — same violet accent as the rest of the app.
+function ProfileToggle({ on, onToggle, label }) {
+  return (
+    <button
+      onClick={onToggle}
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      style={{
+        width: 44,
+        height: 26,
+        borderRadius: 999,
+        border: "none",
+        flexShrink: 0,
+        background: on ? T.accent : "#DDD9EA",
+        position: "relative",
+        cursor: "pointer",
+        transition: "background 0.18s ease",
+        padding: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: on ? 21 : 3,
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          background: "#fff",
+          boxShadow: "0 1px 4px rgba(20,18,43,0.25)",
+          transition: "left 0.18s ease",
+        }}
+      />
+    </button>
+  );
+}
+
+// Mock spending history for the wallet card's mini chart, grouped Sunday
+// through Saturday. Capped at exactly two weeks (this week + last week) —
+// there is no data beyond that, which is what makes the swipeable chart's
+// two-week limit real rather than just a UI restriction.
+const SPENDING_DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
+/** Midnight on the Sunday that starts the week `value` falls in. */
+function startOfWeek(value) {
+  const d = new Date(value);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+// This week and last week, Sunday through Saturday, built from the account's
+// real transactions. Each day carries both sides of the ledger — paid (money
+// out) and received (money in) — so the chart can show a single day split in
+// two rather than one bar per day. No transactions means seven zero days,
+// which is the true shape of a brand-new account.
+function buildDailySpending(transactions) {
+  const weeks = [0, 1].map(() => Array.from({ length: 7 }, () => ({ paid: 0, received: 0 })));
+  const thisWeekStart = startOfWeek(new Date());
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+  for (const txn of transactions || []) {
+    if (!txn?.createdAt) continue;
+    // Failed and cancelled attempts never moved money, so they never show up
+    // as a bar. `received` records carry the counterparty's status.
+    if (txn.status && !["success", "completed", "received"].includes(txn.status)) continue;
+    const when = new Date(txn.createdAt);
+    if (Number.isNaN(when.getTime())) continue;
+    const daysBack = Math.floor((thisWeekStart - startOfWeek(when)) / (7 * MS_PER_DAY));
+    if (daysBack < 0 || daysBack > 1) continue; // outside the two weeks shown
+    const day = weeks[daysBack][when.getDay()];
+    const amount = Number(txn.amount) || 0;
+    if (txn.direction === "received") day.received += amount;
+    else day.paid += amount;
+  }
+
+  const round = (n) => Math.round(n * 100) / 100;
+  const totals = weeks.map((week) => ({
+    paid: round(week.reduce((sum, d) => sum + d.paid, 0)),
+    received: round(week.reduce((sum, d) => sum + d.received, 0)),
+  }));
+  return { weeks, totals }; // weeks[0] = this week (Sun..Sat), weeks[1] = last week
+}
+
+// A mini 7-bar chart of the wallet card's daily spending, Sunday through
+// Saturday. The two interactions are kept separate on purpose: drag left/
+// right on the chart to switch between this week and last week (week-wise),
+// and tap a single bar to see that one day's amount (day-wise) — tapping it
+// again goes back to showing the week total. Hard-capped at two weeks total
+// — dragging past either end just resists/holds instead of paging into data
+// that isn't there.
+function DailySpendingChart({ weeks, totals, lifetime, status = "ready", symbol = "$" }) {
+  const [weekOffset, setWeekOffset] = useState(0); // 0 = this week, 1 = last week
+  const [selectedDay, setSelectedDay] = useState(null); // index into the current week, or null
+  const maxOffset = weeks.length - 1;
+  const dragRef = useRef(null);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  const clamp = (n) => Math.max(0, Math.min(maxOffset, n));
+
+  const handlePointerDown = (e) => {
+    dragRef.current = { startX: e.clientX, moved: 0 };
+    setDragging(true);
+  };
+  const handlePointerMove = (e) => {
+    if (!dragRef.current) return;
+    let delta = e.clientX - dragRef.current.startX;
+    dragRef.current.moved = Math.abs(delta);
+    // Resist dragging past either end instead of allowing free travel.
+    if ((weekOffset === 0 && delta < 0) || (weekOffset === maxOffset && delta > 0)) {
+      delta *= 0.3;
+    }
+    setDragX(delta);
+  };
+  const handlePointerUp = (e) => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDragging(false);
+    const dragThreshold = 36;
+    if (d && d.moved < 6) {
+      // Barely moved — a tap on one specific day, not a week swipe.
+      const dayEl = e.target.closest && e.target.closest("[data-day-index]");
+      if (dayEl) {
+        const i = Number(dayEl.getAttribute("data-day-index"));
+        setSelectedDay((prev) => (prev === i ? null : i));
+      }
+    } else if (dragX < -dragThreshold) {
+      setWeekOffset((w) => clamp(w + 1)); // dragged left -> older week
+      setSelectedDay(null);
+    } else if (dragX > dragThreshold) {
+      setWeekOffset((w) => clamp(w - 1)); // dragged right -> newer week
+      setSelectedDay(null);
+    }
+    setDragX(0);
+  };
+
+  const days = weeks[weekOffset]; // [{ paid, received }, ...] for the week
+  const total = totals[weekOffset]; // { paid, received } for that week
+  const max = Math.max(...days.map((d) => Math.max(d.paid, d.received)), 1);
+  // With no day tapped these are the account's lifetime totals — the same
+  // two figures the Profile's Paid and Received panels add up, so the card
+  // and the panels can't tell different stories. Tapping a bar narrows it
+  // to that one day; the bars themselves always show the week.
+  const display = selectedDay !== null ? days[selectedDay] : (lifetime || total);
+
+  // A figure that isn't known yet must not render as a number. Loading gets
+  // a shimmer bar, a failed fetch gets a dash — either way, never a stand-in
+  // amount that reads exactly like a real balance.
+  const renderAmount = (value, testId) => {
+    if (status === "loading") {
+      return (
+        <div
+          data-testid={`${testId}-skeleton`}
+          className="v2-shimmer"
+          style={{ width: 62, height: 15, borderRadius: 5, background: "rgba(255,255,255,0.22)" }}
+        />
+      );
+    }
+    if (status === "error") {
+      return <div data-testid={testId} style={{ fontSize: 13, fontWeight: 700 }}>–</div>;
+    }
+    return (
+      <div data-testid={testId} style={{ fontSize: 13, fontWeight: 700 }}>
+        {symbol}{value.toFixed(2)}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      {/* Paid sits top-left in red, Received sits top-right in green — the
+          same red/green split carries down into each day's bar below. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontSize: 9, fontWeight: 700, color: "#FCA5A5", textTransform: "uppercase", letterSpacing: 0.4 }}>
+            Paid
+          </div>
+          {renderAmount(display.paid, "card-paid")}
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: "#86EFAC", textTransform: "uppercase", letterSpacing: 0.4 }}>
+            Received
+          </div>
+          {renderAmount(display.received, "card-received")}
+        </div>
+      </div>
+
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 7,
+          height: 46,
+          marginTop: 12,
+          touchAction: "pan-y",
+          cursor: dragging ? "grabbing" : "grab",
+          transform: `translateX(${dragX * 0.4}px)`,
+          transition: dragging ? "none" : "transform 0.25s ease",
+        }}
+      >
+        {days.map((d, i) => {
+          const isToday = weekOffset === 0 && i === days.length - 1;
+          const isSelected = selectedDay === i;
+          const highlighted = selectedDay !== null ? isSelected : isToday;
+          const paidH = Math.max(4, (d.paid / max) * 34);
+          const receivedH = Math.max(4, (d.received / max) * 34);
+          return (
+            <div key={i} data-day-index={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+              {/* Each day's bar is split in half: red (paid) on the left,
+                  green (received) on the right, sharing one baseline. */}
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 2, width: "100%", maxWidth: 22, justifyContent: "center" }}>
+                <div
+                  role="img"
+                  aria-label={`${SPENDING_DAY_LABELS[i]} paid: ${symbol}${d.paid.toFixed(2)}`}
+                  style={{
+                    flex: 1,
+                    height: paidH,
+                    borderRadius: "4px 2px 2px 4px",
+                    background: highlighted ? "#EF4444" : "rgba(239,68,68,0.5)",
+                    boxShadow: isSelected ? "0 0 0 1.5px rgba(255,255,255,0.9)" : "none",
+                    transition: "height 0.3s ease, background 0.15s ease",
+                  }}
+                />
+                <div
+                  role="img"
+                  aria-label={`${SPENDING_DAY_LABELS[i]} received: ${symbol}${d.received.toFixed(2)}`}
+                  style={{
+                    flex: 1,
+                    height: receivedH,
+                    borderRadius: "2px 4px 4px 2px",
+                    background: highlighted ? "#22C55E" : "rgba(34,197,94,0.5)",
+                    boxShadow: isSelected ? "0 0 0 1.5px rgba(255,255,255,0.9)" : "none",
+                    transition: "height 0.3s ease, background 0.15s ease",
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: 9.5, fontWeight: 700, opacity: highlighted ? 0.95 : 0.6 }}>
+                {SPENDING_DAY_LABELS[i]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Two dots mark the hard two-week limit — just a quiet sense of
+          "there's one more week back, and that's it". */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 5, marginTop: 10 }}>
+        {weeks.map((_, i) => (
+          <span
+            key={i}
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: "50%",
+              background: i === weekOffset ? "#ffffff" : "rgba(255,255,255,0.35)",
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DashboardScreenBase({
+  dialCountry,
+  onLogout,
+  onOpenSend,
+  onOpenBank,
+  onOpenCoverage,
+  myGloobalId,
+  phoneNumber,
+  fullName,
+  referralCount,
+  onGloobalIdChange,
+  paymentReceipt,
+  openAssetsToken = 0,
+}) {
+  // Hidden on every open, deliberately never remembered. Persisting "shown"
+  // would mean the balance is on screen the instant the app is opened —
+  // over a shoulder, on a lock screen preview, in a shared-device unlock —
+  // which is the one moment the mask exists to cover. Revealing is one tap.
+  const [balanceVisible, setBalanceVisible] = useState(false);
+  const [revealingBalance, setRevealingBalance] = useState(false);
+  // Whether this account has a passkey at all. Null = not known yet. Used
+  // only to decide whether revealing the balance is worth a device check;
+  // an account with nothing enrolled must not be locked out of its own
+  // balance, so unknown and false both mean "just show it".
+  const [accountHasPasskey, setAccountHasPasskey] = useState(null);
+  const [activeTab, setActiveTab] = useState("home"); // home | accounts | profile
+  // Real transaction history for this account, split by direction.
+  const [moneyRows, setMoneyRows] = useState(NO_MONEY_ROWS);
+  // "loading" | "ready" | "error" — Paid and Received read from the same
+  // fetch, so they share one status. An error is surfaced and retryable
+  // rather than being flattened into an empty list, which would tell
+  // someone with a full history that they have never been paid.
+  const [moneyStatus, setMoneyStatus] = useState("loading");
+  const [moneyReload, setMoneyReload] = useState(0);
+  // The same fetch, kept in its raw form for the wallet card: the week's
+  // bars are grouped from these records, and the card's PAID / RECEIVED
+  // figures are the account's lifetime totals as the backend adds them up.
+  const [moneyTxns, setMoneyTxns] = useState([]);
+  const [moneyTotals, setMoneyTotals] = useState({ paid: 0, received: 0 });
+
+  // Send Money renders as an overlay above this screen, so the dashboard
+  // never unmounts and a fetch on mount alone would leave the Profile
+  // panels showing pre-transfer data. Re-reading on every tab switch is
+  // what makes a payment appear as soon as you go look for it.
+  useEffect(() => {
+    if (!myGloobalId) return;
+    let cancelled = false;
+    setMoneyStatus("loading");
+    (async () => {
+      try {
+        const { transactions, totalSent, totalReceived } = await getTransactionSummary(myGloobalId);
+        if (cancelled) return;
+        setMoneyRows(transactions.map(toMoneyRow));
+        setMoneyTxns(transactions);
+        setMoneyTotals({ paid: totalSent, received: totalReceived });
+        setMoneyStatus("ready");
+      } catch {
+        // Offline, or the backend is still waking up. Say so — an empty
+        // list here would be a claim about this account's history, not a
+        // report about the request.
+        if (cancelled) return;
+        setMoneyStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [myGloobalId, activeTab, moneyReload]);
+
+  // Asked once per account, not per reveal, so tapping the eye doesn't wait
+  // on a round trip. Failure leaves it null, which reads as "no passkey".
+  useEffect(() => {
+    if (!myGloobalId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await passkeyStatus(myGloobalId);
+        if (!cancelled) setAccountHasPasskey(Boolean(status?.hasPasskey));
+      } catch {
+        if (!cancelled) setAccountHasPasskey(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [myGloobalId]);
+
+  const sentRows = useMemo(() => moneyRows.filter((r) => r.status !== "received"), [moneyRows]);
+  const receivedRows = useMemo(() => moneyRows.filter((r) => r.status === "received"), [moneyRows]);
+  // The PayLater screen (opened from the Accounts tab). Demo ledger for
+  // the prototype: dues are derived from the pending history entries so
+  // the balance, dues, and history can never disagree with each other.
+  const [showPayLater, setShowPayLater] = useState(false);
+  // My Assets overlay (opened from the Accounts tab). Cross-links with
+  // PayLater in both directions.
+  // My Assets is unmounted while closed, so it re-reads on every open — a
+  // seed planted by a payment is already there the next time it is opened,
+  // with nothing to invalidate.
+  const [showMyAssets, setShowMyAssets] = useState(false);
+  // The receipt screen sits above the dashboard and can't reach this state
+  // directly, so it asks by incrementing a token. Zero is the initial value
+  // and deliberately opens nothing — only a bump is a request.
+  useEffect(() => {
+    if (openAssetsToken > 0) setShowMyAssets(true);
+  }, [openAssetsToken]);
+  // Live PayLater figures — limit is always the account's current total
+  // assets (GET /api/assets/paylater/:symbolId), never a hardcoded number.
+  // Null until the fetch lands. Everything on the PayLater screen — the
+  // limit, the dues, and the activity list — comes from this one read; there
+  // is no demo ledger standing in behind it any more.
+  const [paylaterLive, setPaylaterLive] = useState(null);
+  const [paylaterStatus, setPaylaterStatus] = useState("loading"); // loading | ready | error
+  const [paylaterReload, setPaylaterReload] = useState(0);
+
+  useEffect(() => {
+    if (!showPayLater || !myGloobalId) return;
+    let cancelled = false;
+    setPaylaterStatus("loading");
+    (async () => {
+      try {
+        const data = await getPayLater(myGloobalId);
+        if (cancelled) return;
+        setPaylaterLive(data);
+        setPaylaterStatus("ready");
+      } catch {
+        // Offline, or the backend is still waking up. An empty list here
+        // would be a claim about the account; a retry is the honest answer.
+        if (cancelled) return;
+        setPaylaterStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showPayLater, myGloobalId, paylaterReload]);
+
+  const paylaterLimit = paylaterLive ? paylaterLive.limit : 0;
+  const paylaterAvailable = paylaterLive ? paylaterLive.available : 0;
+  const paylaterPendingDues = paylaterLive ? paylaterLive.pendingDues : 0;
+  const paylaterActivity = Array.isArray(paylaterLive?.transactions) ? paylaterLive.transactions : [];
+
+  // --- Gloobal Creators: cashback sharing --------------------------------
+  // Tapping Receive leads with "Share with Gloobal users" — the Creator picks
+  // what share of an incoming payment goes back to whoever paid — and only
+  // then opens the receive sheet itself. The saved rate is read back from the
+  // account so the picker opens on whatever they chose last time.
+  const [showCreatorCashback, setShowCreatorCashback] = useState(false);
+  const [creatorRate, setCreatorRate] = useState(0);
+
+  // --- GH Score ----------------------------------------------------------
+  // The Gloobal Human Score lives on Profile, not Accounts.
+  const [showGHScore, setShowGHScore] = useState(false);
+
+  const [showReceiveHistory, setShowReceiveHistory] = useState(false);
+  const [showIdTag, setShowIdTag] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [showReceive, setShowReceive] = useState(false);
+  // Rent (from the Bills row) now opens a choice instead of a single
+  // action: showRentChoice is the "Send Rent / Accept Rent" picker sheet,
+  // and showRentReceive is the QR + Gloobal ID sheet shown after picking
+  // Accept Rent. Send Rent doesn't need its own state — it just reuses
+  // onOpenSend, the exact same flow the main Send action opens.
+  const [showRentChoice, setShowRentChoice] = useState(false);
+  const [showRentReceive, setShowRentReceive] = useState(false);
+  // The per-country telecom recharge sheet (opened from the Bills row).
+  const [showRecharge, setShowRecharge] = useState(false);
+  // The per-country electricity operator sheet — same locked pattern as
+  // showRecharge (opened from the Bills row).
+  const [showElectricity, setShowElectricity] = useState(false);
+  // "More" — opened from the Bills row's 4th button. A search bar over a
+  // single scrollable list: Recharge/Electricity/Rent pinned first (same
+  // handlers as their own Bills buttons), then Travel as its own icon
+  // group, then the top 10 businesses. Tapping a business or travel
+  // option opens payTarget below — a minimal functional pay sheet (same
+  // amount-in/confirm core as Send Money), not another locked catalogue.
+  const [showMore, setShowMore] = useState(false);
+  const [moreQuery, setMoreQuery] = useState("");
+  const [travelExpanded, setTravelExpanded] = useState(false);
+  const [payTarget, setPayTarget] = useState(null); // { label, chip } | null
+  const [payAmount, setPayAmount] = useState("25.00");
+  // The same four-option "Pay with" funding-source chooser Send Money
+  // uses (Gloobal Bank / Gloobal PayLater / Gloobal Coin / Local Banks) —
+  // every place with a Pay action leads with the same four options
+  // before it confirms, so this sheet isn't a different, shorter path.
+  const [payTargetMethodOpen, setPayTargetMethodOpen] = useState(false);
+  const [payTargetMethod, setPayTargetMethod] = useState(null);
+  // null | "share" | "referral" | "changeId" — full-screen overlays opened
+  // from the Profile tab, layered above the tab bar the same way
+  // Send/Bank/Coverage sit above the dashboard itself.
+  const [profileOverlay, setProfileOverlay] = useState(null);
+  // --- Change Gloobal ID ------------------------------------------------
+  // The new ID being typed, and whether it's free. Same availability
+  // endpoint and same suggestion generator registration uses, so a rename
+  // can't land on an ID that creation would have rejected.
+  const [newIdValue, setNewIdValue] = useState("");
+  const [newIdStatus, setNewIdStatus] = useState(null); // null | "checking" | "available" | "taken"
+  const [newIdSuggestions, setNewIdSuggestions] = useState([]);
+  const [changingId, setChangingId] = useState(false);
+  const [changeIdError, setChangeIdError] = useState(null);
+  // Every Gloobal ID this account has used before, newest first, with when it
+  // was replaced — so there is a proper record of which ID belonged to them
+  // when. Held locally and merged with whatever the backend has recorded.
+  const [idHistory, setIdHistory] = useState([]);
+  // The history sheet, opened from the icon in the Change Gloobal ID header.
+  const [showIdHistory, setShowIdHistory] = useState(false);
+  // Only the five most recent are shown — enough to answer "what was I
+  // called before", short of turning into an archive of every rename. The
+  // rest are one tap away rather than gone.
+  const [idHistoryExpanded, setIdHistoryExpanded] = useState(false);
+  const recentIdHistory = useMemo(
+    () => (idHistoryExpanded ? idHistory : idHistory.slice(0, 5)),
+    [idHistory, idHistoryExpanded]
+  );
+  // Renaming a Gloobal ID is confirmed with the device's own biometrics
+  // before the API call goes out — never after, and never optionally.
+  //   null | { stage: "prompt" | "pin" | "error", message } — see
+  //   requestIdChangeConfirmation below.
+  const [bioConfirm, setBioConfirm] = useState(null);
+  const [bioPin, setBioPin] = useState("");
+  // My Referral Network, straight from GET /api/referrals/:symbolId — the
+  // real edges the backend recorded at registration, not a generated
+  // sample. Fetched when the overlay opens (and on retry), so a referral
+  // made since the app launched shows up without a reload.
+  const [referrals, setReferrals] = useState([]);
+  const [referralsLoading, setReferralsLoading] = useState(false);
+  const [referralsError, setReferralsError] = useState(null);
+  const [referralsAttempt, setReferralsAttempt] = useState(0);
+  // Whether the "How your network works" explanation card is open —
+  // opened from the option that replaced the old "Invite a friend" CTA.
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  // Which profile settings sheet is open (one of PROFILE_ROWS), or null.
+  // Each sheet has minimal-but-real behavior for the prototype: toggles
+  // actually toggle, language/currency selections actually select.
+  const [profileDetail, setProfileDetail] = useState(null);
+  // Basic time filters for the Profile's separate Paid and Received
+  // panels — each panel keeps its own filter, reset to "All" whenever
+  // that panel is opened fresh.
+  const [paidFilter, setPaidFilter] = useState("All");
+  const [receivedFilter, setReceivedFilter] = useState("All");
+  useEffect(() => {
+    if (profileDetail === "Paid") setPaidFilter("All");
+    if (profileDetail === "Received") setReceivedFilter("All");
+  }, [profileDetail]);
+  // Personal Details' Name row cycles through the same shared identity
+  // faces used elsewhere (name → Gloobal ID → mobile number → country
+  // name) via one tap, resetting to "name" each time the sheet opens.
+  const [personalDisplayMode, setPersonalDisplayMode] = useState("name");
+  useEffect(() => {
+    if (profileDetail === "Personal Details") setPersonalDisplayMode("name");
+  }, [profileDetail]);
+  const [profileToggles, setProfileToggles] = useState({
+    biometric: true,
+    appLock: false,
+    txAlerts: true,
+    referralAlerts: true,
+    promos: false,
+    autopay: true,
+  });
+  const [profileLanguage, setProfileLanguage] = useState("English");
+  const flipToggle = (key) => setProfileToggles((t) => ({ ...t, [key]: !t[key] }));
+  // The account's real Gloobal bank balance, off the profile read. Null until
+  // it lands — rendered as a dash rather than as a number, because a
+  // stand-in figure on a balance card is indistinguishable from the truth.
+  const [balanceValue, setBalanceValue] = useState(null);
+  const balance = balanceValue === null
+    ? "—"
+    : balanceValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // The person's own currency symbol, from their registration country —
+  // every amount on this screen renders in it (₹ for India, £ for the
+  // UK, and so on), instead of hardcoded dollars. One shared lookup
+  // (constants/finance) so the balance, Paid/Received, PayLater, My Assets
+  // and Send can never end up on two different symbols for one account.
+  const ccy = symbolForCountry(dialCountry.iso);
+
+  // The one canonical Gloobal ID: the 12-symbol Secure ID set at
+  // registration. This exact same value is what shows on the dashboard's
+  // flag-tap tag, the Receive sheet, the Share screen, and inside the
+  // referral link — receiving, sharing, and referring are all the same
+  // identity, never three different-looking codes. Falls back to a run of
+  // "+" the same length if it isn't available yet, rather than showing
+  // nothing.
+  const shareableGloobalId = myGloobalId && myGloobalId.length === 12 ? myGloobalId : "++++++++++++";
+  const gloobalIdTag = shareableGloobalId;
+
+  // The Gloobal ID doubles as the referral code, so every share/invite path
+  // resolves to one direct link — no separate referral code to manage.
+  // Swap this base URL for the real deep-link domain when it exists.
+  //
+  // The ID is made of Unicode symbols (■ □ ● ○ + − × =), none of which are
+  // safe raw in a URL path: messaging apps either refuse to linkify them or
+  // encode them inconsistently, and a bare "+" is read back as a space, so
+  // the link resolves to the wrong ID. encodeURIComponent percent-encodes
+  // every one of them — encodeURI would not, since it leaves + and = alone.
+  const referralLink = `${REFERRAL_LINK_BASE}/r/${encodeURIComponent(shareableGloobalId)}`;
+
+  // A random placeholder profile photo, picked once per session rather than
+  // re-randomizing on every render.
+  const [avatarSeed] = useState(() => Math.floor(Math.random() * 70) + 1);
+
+  // --- Profile photo -----------------------------------------------------
+  // Until somebody picks their own, the Gloobal logo stands in — never a
+  // broken image or an empty circle. Stored as a data URL against this
+  // account's own key, so two accounts on one device don't share a face.
+  // There is no photo upload endpoint yet; this is deliberately local-only.
+  const [profilePhoto, setProfilePhoto] = useState(null);
+  const photoInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!myGloobalId) return;
+    try {
+      setProfilePhoto(window.localStorage.getItem(`gloobal.profilePhoto.${myGloobalId}`) || null);
+    } catch {
+      // storage unavailable — the logo placeholder still renders
+    }
+  }, [myGloobalId]);
+
+  const handlePhotoPicked = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      setProfilePhoto(dataUrl);
+      try {
+        window.localStorage.setItem(`gloobal.profilePhoto.${myGloobalId}`, dataUrl);
+      } catch {
+        // quota/private mode — the photo still shows for this session
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
+  // The account's own record: the cashback share this Creator gives back, and
+  // every Gloobal ID it has been known by. Both come off the same profile
+  // read, so one round trip covers both.
+  useEffect(() => {
+    if (!myGloobalId) return;
+    let cancelled = false;
+    getProfile(myGloobalId)
+      .then((user) => {
+        if (cancelled || !user) return;
+        setCreatorRate(Number(user.cashbackRate) || 0);
+        if (Number.isFinite(Number(user.balance))) setBalanceValue(Number(user.balance));
+        // The backend's record is the authoritative one, so it goes first
+        // into the merge and its timestamps win. The local fallback below
+        // only fills a gap the backend left: the account's join date is
+        // when its first Gloobal ID came into existence, which dates the
+        // "created" entry for accounts that predate this being recorded.
+        const remote = Array.isArray(user.symbolIdHistory) ? user.symbolIdHistory : [];
+        const seeded = remote.some((entry) => idHistoryAction(entry) === "created")
+          ? null
+          : ensureIdCreatedEntry(myGloobalId, user.createdAt || user.joinedDate);
+        if (remote.length || seeded) {
+          setIdHistory((local) => mergeIdHistory(remote, [...local, ...(seeded ? [seeded] : [])]));
+        }
+      })
+      .catch(() => {
+        // offline / cold start — locally held values still render
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [myGloobalId]);
+
+  // A completed payment carries its own outcome, so the balance moves off the
+  // receipt rather than off a re-read that would race the write. A seed that
+  // was actually planted also invalidates whatever My Assets is holding.
+  useEffect(() => {
+    if (!paymentReceipt) return;
+    // Only the account that made the payment. A receipt outliving a sign-out
+    // would otherwise be re-applied on the next mount, showing one person's
+    // balance to the next one to use the device.
+    if (paymentReceipt.symbolId && paymentReceipt.symbolId !== myGloobalId) return;
+    if (Number.isFinite(Number(paymentReceipt.newBalance))) {
+      setBalanceValue(Number(paymentReceipt.newBalance));
+    }
+    // The history panels are now stale by exactly one payment.
+    setMoneyReload((n) => n + 1);
+  }, [paymentReceipt, myGloobalId]);
+
+  // Locally recorded ID history for whichever ID is current now.
+  useEffect(() => {
+    if (!myGloobalId) return;
+    setIdHistory((local) => mergeIdHistory(local, readIdHistory(myGloobalId)));
+  }, [myGloobalId]);
+
+  useEffect(() => {
+    if (profileOverlay !== "referral") return;
+    const symbolId = myGloobalId;
+    if (!symbolId) {
+      setReferrals([]);
+      setReferralsError(null);
+      return;
+    }
+    let cancelled = false;
+    setReferralsLoading(true);
+    setReferralsError(null);
+    getReferrals(symbolId)
+      .then((list) => {
+        if (!cancelled) setReferrals(list);
+      })
+      .catch(() => {
+        if (!cancelled) setReferralsError("Could not load referrals. Try again.");
+      })
+      .finally(() => {
+        if (!cancelled) setReferralsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileOverlay, myGloobalId, referralsAttempt]);
+
+  // Two weeks of spending (this week + last week) shown as a swipeable mini
+  // bar chart at the bottom of the wallet card — generated once per
+  // session, same pattern as the referral network mock above.
+  const dailySpending = useMemo(() => buildDailySpending(moneyTxns), [moneyTxns]);
+
+  // Which profile this Gloobal ID is acting as when it's shared — "user"
+  // for personal spending (bills, transfers to friends/family) or
+  // "merchant" for business takings (shop sales, invoices). Flipping this
+  // is the same quick rotateY flip used for the Secure ID / Referral card
+  // during registration. Whichever side is showing is the profile a
+  // payment coming in through this ID should be recorded against — the
+  // actual ledger split lives outside this screen; this state is the
+  // switch it would read.
+  const [shareRole, setShareRole] = useState("user"); // "user" | "merchant"
+  const [roleFlipping, setRoleFlipping] = useState(false);
+
+  // Hiding is free; revealing asks the device first. The check is a courtesy
+  // to the account holder, not a lock on their own money — an account with no
+  // passkey, a browser with no platform authenticator, or a status call that
+  // never answered all reveal directly. Only an enrolled account that then
+  // fails or cancels the prompt keeps the mask on.
+  const handleToggleBalance = async () => {
+    if (balanceVisible) {
+      setBalanceVisible(false);
+      return;
+    }
+    if (revealingBalance) return;
+
+    if (!accountHasPasskey) {
+      setBalanceVisible(true);
+      return;
+    }
+
+    setRevealingBalance(true);
+    try {
+      const available = await window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.();
+      if (!available) {
+        setBalanceVisible(true);
+        return;
+      }
+      const options = await passkeyAuthOptions(myGloobalId);
+      const authResponse = await startAuthentication({ optionsJSON: options });
+      const verify = await passkeyAuthVerify(myGloobalId, authResponse);
+      if (!verify?.verified) throw new Error("not verified");
+      setBalanceVisible(true);
+    } catch {
+      setBalanceVisible(false);
+      showToast("Balance stays hidden — device check didn't pass");
+    } finally {
+      setRevealingBalance(false);
+    }
+  };
+
+  const toggleShareRole = () => {
+    setRoleFlipping(true);
+    setTimeout(() => {
+      setShareRole((r) => (r === "user" ? "merchant" : "user"));
+      setRoleFlipping(false);
+    }, 180);
+  };
+
+  const revealGloobalId = () => {
+    setShowIdTag(true);
+    setTimeout(() => setShowIdTag(false), 2500);
+  };
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1800);
+  };
+
+  // Single shared handler for every "Share" action in the app (Profile tab,
+  // search bar icon, Referral Network invite) — always shares the direct
+  // referral link, never just the bare ID.
+  // The message body carries the ID twice on purpose: once as the raw
+  // symbols, so the person reading it can see and retype the Gloobal ID
+  // by hand, and once inside the percent-encoded link, which is the only
+  // form that survives being turned into a tappable URL.
+  const handleShareReferralLink = async () => {
+    const text = `Join me on Gloobal Access — send and receive money globally.\nMy Gloobal ID: ${shareableGloobalId}\nTap to join: ${referralLink}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "Join Gloobal Access", text, url: referralLink });
+      } else {
+        await navigator.clipboard.writeText(referralLink);
+        showToast(shareRole === "merchant" ? "Link copied · Creators" : "Link copied · Personal");
+      }
+    } catch {
+      // share/clipboard denied or dismissed — nothing to recover from
+    }
+  };
+
+  const handleCopyReferralLink = async () => {
+    try {
+      await navigator.clipboard.writeText(referralLink);
+    } catch {
+      // share/clipboard denied or dismissed — nothing to recover from
+    }
+    showToast(shareRole === "merchant" ? "Link copied · Creators" : "Link copied · Personal");
+  };
+
+  // --- Change Gloobal ID -------------------------------------------------
+
+  const SYMBOL_ID_LENGTH = 12;
+
+  // Is the replacement ID free? Deliberately the same check the creation
+  // screen runs, rather than a second implementation that could drift from
+  // it. Typing again clears a stale "taken" panel.
+  useEffect(() => {
+    if (profileOverlay !== "changeId") return;
+    if (newIdValue.length !== SYMBOL_ID_LENGTH) {
+      setNewIdStatus(null);
+      setNewIdSuggestions([]);
+      return;
+    }
+    // Your own current ID isn't "taken" by somebody else, but it is not a
+    // change either — say so plainly instead of offering to rename it to
+    // itself.
+    if (newIdValue === shareableGloobalId) {
+      setNewIdStatus("same");
+      setNewIdSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    setNewIdStatus("checking");
+    checkSymbolAvailability(newIdValue).then(({ available }) => {
+      if (cancelled) return;
+      // This screen states availability out loud, so an unanswered lookup
+      // cannot be rendered as "Available ✓" — that is exactly the green tick
+      // over an already-taken ID the founder reported. "unknown" says so and
+      // holds Update ID shut until a real answer arrives.
+      if (available === null) {
+        setNewIdStatus("unknown");
+        setNewIdSuggestions([]);
+        return;
+      }
+      setNewIdStatus(available ? "available" : "taken");
+      setNewIdSuggestions(available ? [] : generateIdSuggestions(newIdValue, SYMBOL_ID_LENGTH));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileOverlay, newIdValue, shareableGloobalId]);
+
+  const closeChangeId = () => {
+    setProfileOverlay(null);
+    setNewIdValue("");
+    setNewIdStatus(null);
+    setNewIdSuggestions([]);
+    setChangeIdError(null);
+    setBioConfirm(null);
+    setBioPin("");
+    setShowIdHistory(false);
+  };
+
+  // The rename itself. Only ever reached once a device confirmation has come
+  // back positive — nothing calls this directly off the Update ID button.
+  const performIdChange = async () => {
+    if (changingId) return;
+    const previousId = shareableGloobalId;
+    setChangeIdError(null);
+    setChangingId(true);
+    try {
+      const result = await changeSymbolId(previousId, newIdValue);
+      setChangingId(false);
+      setBioConfirm(null);
+      setBioPin("");
+      // Write the old ID into the record before the app starts calling itself
+      // by the new one, so the history is complete and correctly ordered, and
+      // carry the ID-scoped local data (GH answers, profile photo) across with
+      // it — a rename is the same person, not a new account.
+      setIdHistory(recordIdChange(previousId, result.newSymbolId));
+      migrateIdScopedStorage(previousId, result.newSymbolId);
+      // Hand the new ID up so every other screen — share card, Send Money,
+      // the session in localStorage — follows it. Signing out and back in
+      // is not required.
+      onGloobalIdChange?.(result.newSymbolId, result.user);
+      closeChangeId();
+      showToast("Gloobal ID updated successfully");
+    } catch (err) {
+      setChangingId(false);
+      setBioConfirm(null);
+      setBioPin("");
+      setChangeIdError(err instanceof Error ? err.message : "Couldn't update your Gloobal ID. Try again.");
+    }
+  };
+
+  // Update ID opens the confirmation gate and stops there. The API call is
+  // made by performIdChange, and only after the device says yes — a cancelled
+  // or failed check leaves the ID exactly as it was.
+  const handleConfirmIdChange = () => {
+    if (newIdStatus !== "available" || changingId || bioConfirm) return;
+    setChangeIdError(null);
+    setBioPin("");
+    setBioConfirm({ stage: "prompt", message: null });
+  };
+
+  // The biometric ceremony runs after the prompt has painted, so the overlay
+  // is on screen before the device dialog appears (and before any request
+  // goes out). A device with nothing enrolled falls back to the PIN pad
+  // rather than blocking the rename outright.
+  useEffect(() => {
+    if (bioConfirm?.stage !== "prompt") return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const available = await window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.();
+        if (cancelled) return;
+        if (!available) {
+          setBioConfirm({ stage: "pin", message: "No fingerprint or Face ID on this device — enter your PIN instead." });
+          return;
+        }
+        const options = await passkeyAuthOptions(shareableGloobalId);
+        if (cancelled) return;
+        const authResponse = await startAuthentication({ optionsJSON: options });
+        if (cancelled) return;
+        const verify = await passkeyAuthVerify(shareableGloobalId, authResponse);
+        if (cancelled) return;
+        if (!verify?.verified) throw new Error("not verified");
+        await performIdChange();
+      } catch {
+        if (cancelled) return;
+        setBioConfirm({ stage: "error", message: "Biometric confirmation failed. ID not changed." });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bioConfirm?.stage]);
+
+  // PIN fallback — same PIN the account logs in with, verified server-side.
+  const handleBioPinSubmit = async () => {
+    if (bioPin.length < 6 || changingId) return;
+    try {
+      await verifyPin(shareableGloobalId, bioPin);
+      await performIdChange();
+    } catch (err) {
+      setBioPin("");
+      setBioConfirm({
+        stage: "pin",
+        message: err instanceof Error ? err.message : "That PIN wasn't recognized. ID not changed.",
+      });
+    }
+  };
+
+  // Shares the bare Gloobal ID itself (not the referral link) — used by
+  // the Accept Rent sheet so a landlord can send just their ID/QR to a
+  // tenant, the same navigator.share-with-clipboard-fallback pattern the
+  // referral link share uses.
+  const handleShareGloobalId = async () => {
+    const text = `Send my rent to my Gloobal ID: ${gloobalIdTag}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "My Gloobal ID", text });
+      } else {
+        await navigator.clipboard.writeText(gloobalIdTag);
+        showToast("Copied");
+      }
+    } catch {
+      // share/clipboard denied or dismissed — nothing to recover from
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: T.bg,
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: T.fontBody,
+        overflow: "hidden",
+      }}
+    >
+      <DashboardAmbientBg />
+
+      <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 10, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 12px", background: "transparent" }}>
+        <button
+          onClick={onOpenCoverage}
+          aria-label="Gloobal coverage"
+          className="v2-tap"
+          style={{
+            border: "none",
+            background: T.surface,
+            width: 40,
+            height: 40,
+            borderRadius: "50%",
+            padding: 0,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: T.shadowCard,
+            flexShrink: 0,
+          }}
+        >
+          <RotatingGlobeIcon />
+        </button>
+        <button
+          onClick={onOpenCoverage}
+          aria-label="Gloobal coverage"
+          className="v2-tap"
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            border: "none",
+            background: T.surface,
+            borderRadius: T.radiusMd,
+            padding: "11px 15px",
+            boxShadow: T.shadowCard,
+            cursor: "pointer",
+          }}
+        >
+          <Search size={15} color={T.inkFaint} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, fontSize: 13, color: T.inkFaint, fontWeight: 500, textAlign: "center" }}>Gloobal Coverage</span>
+          <span style={{ width: 15, flexShrink: 0 }} aria-hidden="true" />
+        </button>
+
+        {/* Profile flip — switches the same account between its two
+            sides: user/consumer and merchant/producer. Every flow stays
+            identical; only which side the data is read as changes (and
+            share links already carry the active side via shareRole). */}
+        <button
+          onClick={() => {
+            setShareRole((r) => {
+              const next = r === "user" ? "merchant" : "user";
+              showToast(next === "merchant" ? "Switched to Creators profile" : "Switched to Personal profile");
+              return next;
+            });
+          }}
+          aria-label={shareRole === "merchant" ? "Switch to personal profile" : "Switch to Creators profile"}
+          className="v2-tap"
+          style={{
+            border: "none",
+            background: shareRole === "merchant" ? T.gradButton : T.surface,
+            width: 40,
+            height: 40,
+            borderRadius: "50%",
+            padding: 0,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: shareRole === "merchant" ? "0 6px 16px rgba(124,58,237,0.3)" : T.shadowCard,
+            flexShrink: 0,
+          }}
+        >
+          <RefreshCw size={17} color={shareRole === "merchant" ? "#fff" : T.accent} />
+        </button>
+      </div>
+
+      <div style={{ position: "relative", zIndex: 1, flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+        {activeTab === "home" && (
+          <div style={{ padding: "8px 18px 30px", display: "flex", flexDirection: "column", gap: 22 }}>
+            <div
+              style={{
+                position: "relative",
+                borderRadius: T.radiusXl,
+                padding: "24px 22px",
+                background: T.gradWallet,
+                boxShadow: T.shadowRaised,
+                color: "#fff",
+                overflow: "hidden",
+              }}
+            >
+              {/* Soft decorative glow — purely visual, no logic */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: -60,
+                  right: -60,
+                  width: 180,
+                  height: 180,
+                  borderRadius: "50%",
+                  background: "radial-gradient(circle, rgba(255,255,255,0.16), transparent 70%)",
+                  pointerEvents: "none",
+                }}
+              />
+              <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, paddingRight: 44 }}>
+                <button
+                  onClick={revealGloobalId}
+                  aria-label="Show my Gloobal ID"
+                  className="v2-tap"
+                  style={{
+                    border: "1.5px solid rgba(255,255,255,0.35)",
+                    background: "rgba(255,255,255,0.12)",
+                    padding: 3,
+                    borderRadius: 13,
+                    cursor: "pointer",
+                    display: "flex",
+                    lineHeight: 0,
+                    flexShrink: 0,
+                  }}
+                >
+                  <FlagEmoji flag={dialCountry.flag} width={58} height={43} radius={9} />
+                </button>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    opacity: 0.8,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    minWidth: 0,
+                  }}
+                >
+                  {shareRole === "merchant" ? "Gloobal Creators" : `Gloobal ${dialCountry.name}`}
+                </span>
+              </div>
+
+              {/* Pinned to the card's true top-right corner (not just the
+                  header row) — sits outside the row's own padding so it
+                  reads as a corner control for the whole card. */}
+              <button
+                onClick={handleToggleBalance}
+                disabled={revealingBalance}
+                data-testid="balance-eye"
+                aria-label={balanceVisible ? "Hide balance" : "Show balance"}
+                className="v2-tap"
+                style={{
+                  position: "absolute",
+                  top: 14,
+                  right: 14,
+                  zIndex: 2,
+                  border: "none",
+                  background: "rgba(255,255,255,0.16)",
+                  borderRadius: "50%",
+                  width: 32,
+                  height: 32,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <EyeIcon open={balanceVisible} />
+              </button>
+              <div
+                data-testid="balance-amount"
+                style={{ position: "relative", marginTop: 20, fontSize: shareRole === "merchant" ? 24 : 32, fontWeight: 800, letterSpacing: 0.2, fontFamily: T.fontDisplay, display: "flex", alignItems: "center", gap: 10 }}
+              >
+                {balanceVisible ? `${ccy}${balance}` : "•••••••"}
+                {/* Only shown while masked, and only when a device check is
+                    actually what stands between here and the number —
+                    otherwise it would promise a prompt that never comes. */}
+                {!balanceVisible && accountHasPasskey && (
+                  <Fingerprint
+                    size={20}
+                    aria-hidden="true"
+                    style={{ opacity: 0.75, animation: revealingBalance ? "iconAttention 0.7s ease-in-out infinite" : "none" }}
+                  />
+                )}
+              </div>
+              {/* Spending mini chart — sits below its own divider so it
+                  reads as a distinct footer section of the wallet card
+                  rather than competing with the balance above it. */}
+              <div style={{ position: "relative", marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.18)" }}>
+                <DailySpendingChart
+                  weeks={dailySpending.weeks}
+                  totals={dailySpending.totals}
+                  lifetime={moneyTotals}
+                  status={moneyStatus}
+                  symbol={ccy}
+                />
+              </div>
+
+              {showIdTag && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 66,
+                    left: 22,
+                    zIndex: 5,
+                    background: "rgba(15,12,35,0.94)",
+                    backdropFilter: "blur(6px)",
+                    color: "#fff",
+                    borderRadius: 14,
+                    padding: "9px 14px",
+                    boxShadow: T.shadowFloat,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: 0.6, opacity: 0.7, textTransform: "uppercase" }}>
+                    Gloobal ID
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.3, marginTop: 1, fontFamily: T.fontDisplay }}>
+                    {gloobalIdTag}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+              {DASHBOARD_ACTIONS.map(({ key, label, Icon }) => {
+                const onClick =
+                  key === "send" ? onOpenSend
+                  : key === "bank" ? onOpenBank
+                  // Receive leads with the Creator's cashback-sharing choice,
+                  // then the receive sheet itself.
+                  : key === "receive" ? () => setShowCreatorCashback(true)
+                  : key === "scan" ? () => showToast("Scanner opening…")
+                  : undefined;
+                return (
+                <button
+                  key={key}
+                  onClick={onClick}
+                  aria-label={label}
+                  className="v2-tap"
+                  style={{
+                    position: "relative",
+                    overflow: "hidden",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    aspectRatio: "1",
+                    border: `1px solid ${T.line}`,
+                    background: T.surface,
+                    borderRadius: T.radiusLg,
+                    cursor: onClick ? "pointer" : "default",
+                    padding: "15px 14px",
+                    boxShadow: T.shadowCard,
+                  }}
+                >
+                  <CardAmbientField />
+                  <span
+                    style={{
+                      position: "relative",
+                      zIndex: 1,
+                      width: 58,
+                      height: 58,
+                      flexShrink: 0,
+                      borderRadius: 18,
+                      background: T.accentSoft,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Icon size={27} />
+                  </span>
+                </button>
+                );
+              })}
+            </div>
+
+            {/* Bills — a single compact row, kept small and quiet so the
+                screen still reads clean; "More" is the door to everything
+                else the business/network offers, without listing it all
+                here. Consumer bill-pay actions only — hidden on the
+                merchant side, since a merchant profile isn't paying its
+                own recharge/electricity/rent from here. */}
+            {shareRole !== "merchant" && (
+            <div style={{ display: "flex", gap: 10 }}>
+              {BILL_ACTIONS.map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  onClick={() =>
+                    key === "recharge" ? setShowRecharge(true)
+                    : key === "electricity" ? setShowElectricity(true)
+                    : key === "rent" ? setShowRentChoice(true)
+                    : key === "more" ? setShowMore(true)
+                    : showToast(`${label} — coming soon`)
+                  }
+                  aria-label={label}
+                  className="v2-tap"
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "12px 4px",
+                    border: `1px solid ${T.line}`,
+                    background: T.surface,
+                    borderRadius: 16,
+                    cursor: "pointer",
+                    boxShadow: T.shadowCard,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 32, height: 32, borderRadius: 10,
+                      background: T.accentSoft, display: "flex",
+                      alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    <Icon size={15} color={T.accent} />
+                  </span>
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: T.inkSoft }}>{label}</span>
+                </button>
+              ))}
+            </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "accounts" && (
+          <div style={{ padding: "12px 18px 30px", display: "flex", flexDirection: "column", gap: 22 }}>
+            {/* The account tiles — same square, ambient-field tile shape as
+                the dashboard's Send / Add Bank / Scanner / Receive grid.
+                Locks follow the red/green service system: Coin is still
+                red-locked; Bank, PayLater, My Assets, and Linked Banks are
+                live.
+
+                Order is the list itself, so changing it is a one-line
+                move. Gloobal's own accounts come first, in the order the
+                founder asked for — Bank, PayLater, Coin — with My Assets
+                after them and external linked banks always last. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+              {[
+                { key: "gbank", label: "Gloobal Bank", locked: false, onClick: () => showToast("Gloobal Bank — your primary account") },
+                { key: "gpaylater", label: "PayLater", locked: false, onClick: () => setShowPayLater(true) },
+                { key: "gcoin", label: "Gloobal Coin", locked: true, onClick: () => showToast("Locked until live APIs connect") },
+                { key: "gassets", label: "My Assets", locked: false, onClick: () => setShowMyAssets(true) },
+                { key: "linked", label: "Linked Banks", locked: false, onClick: onOpenBank },
+              ].map(({ key, label, locked, onClick }) => (
+                <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                  <button
+                    onClick={onClick}
+                    aria-label={locked ? `${label} — locked` : label}
+                    className="v2-tap"
+                    style={{
+                      position: "relative",
+                      overflow: "hidden",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: "100%",
+                      aspectRatio: "1",
+                      border: `1px solid ${T.line}`,
+                      background: T.surface,
+                      borderRadius: T.radiusLg,
+                      cursor: "pointer",
+                      padding: "15px 14px",
+                      boxShadow: T.shadowCard,
+                    }}
+                  >
+                    <CardAmbientField />
+                    <span style={{ position: "absolute", top: 12, right: 12, zIndex: 1 }}>
+                      <ServiceLock locked={locked} size={13} />
+                    </span>
+                    <span
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        width: 58,
+                        height: 58,
+                        flexShrink: 0,
+                        borderRadius: 18,
+                        background: key === "gbank" ? T.gradButton : T.accentSoft,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        boxShadow: key === "gbank" ? "0 4px 12px rgba(124,58,237,0.28)" : "none",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {key === "gbank" ? (
+                        <img src={globalIdLogo} alt="" style={{ width: 40, height: 40, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
+                      ) : key === "gassets" ? (
+                        <Sprout size={26} color={T.accent} />
+                      ) : key === "gcoin" ? (
+                        <Coins size={26} color={T.accent} />
+                      ) : key === "gpaylater" ? (
+                        <CreditCard size={26} color={T.accent} />
+                      ) : (
+                        <Landmark size={26} color={T.accent} />
+                      )}
+                    </span>
+                  </button>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: T.inkSoft, textAlign: "center" }}>
+                    {label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === "profile" && (
+          <div style={{ padding: "12px 18px 30px", display: "flex", flexDirection: "column", gap: 22 }}>
+            {/* Flag on one side, face on the other, the person's name in the
+                middle — with a thin line running between the two. The line is
+                the point: this account is one node on a global network, and
+                the header says so before any row underneath does. */}
+            <div
+              data-testid="profile-header"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "20px 18px",
+                borderRadius: T.radiusLg,
+                background: T.surface,
+                boxShadow: T.shadowCard,
+              }}
+            >
+              <FlagEmoji
+                flag={dialCountry.flag}
+                width={64}
+                height={64}
+                radius={18}
+                dropShadow="drop-shadow(0 4px 10px rgba(76,29,149,0.20))"
+              />
+
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                <div
+                  data-testid="profile-name"
+                  style={{
+                    fontSize: 18,
+                    fontWeight: 800,
+                    color: T.ink,
+                    fontFamily: T.fontDisplay,
+                    textAlign: "center",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {fullName || "Gloobal ID Member"}
+                </div>
+                {/* The connector — flag on the left, face on the right, one
+                    line between them with a node in the middle. */}
+                <div
+                  data-testid="profile-connector"
+                  aria-hidden="true"
+                  style={{ display: "flex", alignItems: "center", gap: 4, width: "100%" }}
+                >
+                  <span style={{ flex: 1, height: 1, borderTop: `1px dashed ${T.line}` }} />
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: T.accent, flexShrink: 0 }} />
+                  <span style={{ flex: 1, height: 1, borderTop: `1px dashed ${T.line}` }} />
+                </div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, textAlign: "center" }}>
+                  {dialCountry.dialCode} · {dialCountry.name}
+                </div>
+              </div>
+
+              {/* Profile photo — the Gloobal logo until they choose one. */}
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <button
+                  onClick={() => photoInputRef.current?.click()}
+                  aria-label="Change profile photo"
+                  data-testid="profile-photo"
+                  className="v2-tap"
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: "50%",
+                    border: `1px solid ${T.line}`,
+                    background: profilePhoto ? T.surface : T.accentSoft,
+                    padding: 0,
+                    overflow: "hidden",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    boxShadow: "0 4px 10px rgba(76,29,149,0.16)",
+                  }}
+                >
+                  {profilePhoto ? (
+                    <img src={profilePhoto} alt="Your profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <img
+                      src={globalIdLogo}
+                      alt="Gloobal logo"
+                      data-testid="profile-photo-default"
+                      style={{ width: 38, height: 38, objectFit: "contain" }}
+                    />
+                  )}
+                </button>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    bottom: -2,
+                    right: -2,
+                    width: 24,
+                    height: 24,
+                    borderRadius: "50%",
+                    background: T.accent,
+                    border: "2px solid #fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <Camera size={12} color="#fff" />
+                </span>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoPicked}
+                  data-testid="profile-photo-input"
+                  aria-label="Upload a profile photo"
+                  style={{ display: "none" }}
+                />
+              </div>
+            </div>
+
+            <div style={{ borderRadius: T.radiusLg, background: T.surface, overflow: "hidden", boxShadow: T.shadowCard }}>
+              {/* GH Score — the Gloobal Human Score. It belongs to the person,
+                  not to an account balance, so it sits on Profile rather than
+                  anywhere in Accounts. */}
+              <button
+                onClick={() => setShowGHScore(true)}
+                aria-label="My GH Score"
+                className="v2-row"
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "16px 18px",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span
+                  style={{
+                    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                    background: "#FEF3E2", display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Trophy size={18} color="#F59E0B" />
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>My GH Score</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>Check your Gloobal Human Score</div>
+                </span>
+                <ChevronRightIcon />
+              </button>
+
+              <div style={{ height: 1, background: T.line, marginLeft: 72 }} />
+
+              <button
+                onClick={() => setProfileOverlay("referral")}
+                aria-label="My Network"
+                className="v2-row"
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "16px 18px",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span
+                  style={{
+                    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                    background: T.positiveSoft, display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Users2 size={18} color={T.positive} />
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>My Network</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>See who you&apos;ve invited</div>
+                </span>
+                <ChevronRightIcon />
+              </button>
+
+              <div style={{ height: 1, background: T.line, marginLeft: 72 }} />
+
+              <button
+                onClick={() => setProfileOverlay("changeId")}
+                aria-label="My Gloobal ID"
+                className="v2-row"
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "16px 18px",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span
+                  style={{
+                    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                    background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Pencil size={18} color={T.accent} />
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>My Gloobal ID</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>View or change your 12-symbol ID</div>
+                </span>
+                <ChevronRightIcon />
+              </button>
+            </div>
+
+            <div style={{ borderRadius: T.radiusLg, background: T.surface, overflow: "hidden", boxShadow: T.shadowCard }}>
+              {PROFILE_ROWS.map((label, i) => (
+                <button
+                  key={label}
+                  onClick={() => setProfileDetail(label)}
+                  className="v2-row"
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "15px 18px",
+                    border: "none",
+                    borderTop: i === 0 ? "none" : `1px solid ${T.line}`,
+                    background: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{label}</span>
+                  <ChevronRightIcon />
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={onLogout}
+              aria-label="Exit"
+              className="v2-tap"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                border: "1px solid rgba(226,63,69,0.22)",
+                background: T.negativeSoft,
+                borderRadius: T.radiusMd,
+                padding: "14px 0",
+                color: T.negative,
+                fontSize: 13.5,
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              <LogoutIcon />
+              Exit
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          background: T.surface,
+          borderTop: `1px solid ${T.line}`,
+          padding: "10px 0 calc(10px + env(safe-area-inset-bottom, 0px))",
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={() => setActiveTab("home")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 3,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            padding: "4px 0",
+          }}
+        >
+          <HomeTabIcon active={activeTab === "home"} />
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: activeTab === "home" ? T.accent : T.inkFaint }}>
+            Home
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab("accounts")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 3,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            padding: "4px 0",
+          }}
+        >
+          <AccountsTabIcon active={activeTab === "accounts"} />
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: activeTab === "accounts" ? T.accent : T.inkFaint }}>
+            Accounts
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab("profile")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 3,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            padding: "4px 0",
+          }}
+        >
+          <ProfileTabIcon active={activeTab === "profile"} />
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: activeTab === "profile" ? T.accent : T.inkFaint }}>
+            Profile
+          </span>
+        </button>
+      </div>
+
+      {toast && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 90,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 50,
+            background: T.ink,
+            color: "#fff",
+            padding: "11px 18px",
+            borderRadius: 999,
+            fontSize: 13,
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            boxShadow: T.shadowFloat,
+          }}
+        >
+          {toast}
+        </div>
+      )}
+
+      {/* Recharge sheet — mobile operators for the person's own country
+          only. Every operator is listed but locked (right-side lock)
+          until live recharge APIs are wired in, so the catalogue is real
+          and ready without pretending it works yet. */}
+      {showRecharge && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowRecharge(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, maxHeight: "72vh", display: "flex", flexDirection: "column", background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <FlagEmoji flag={dialCountry.flag} width={28} height={21} radius={6} />
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Recharge</span>
+              </span>
+              <button
+                onClick={() => setShowRecharge(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 14px", flexShrink: 0 }}>
+              Operators in {dialCountry.name} — unlocking soon
+            </p>
+
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", borderRadius: T.radiusMd, border: `1px solid ${T.line}` }}>
+              {(TELECOMS_BY_COUNTRY[dialCountry.iso] || []).length === 0 ? (
+                <div style={{ padding: "22px 18px", textAlign: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Coming soon</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
+                    Operators for {dialCountry.name} aren&apos;t listed yet.
+                  </div>
+                </div>
+              ) : (
+                TELECOMS_BY_COUNTRY[dialCountry.iso].map((name, i) => (
+                  <button
+                    key={name}
+                    onClick={() => showToast("Locked until live APIs connect")}
+                    aria-label={`${name} — locked`}
+                    className="v2-row"
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "13px 15px",
+                      border: "none",
+                      borderTop: i === 0 ? "none" : `1px solid ${T.line}`,
+                      background: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 36, height: 36, borderRadius: 11, flexShrink: 0,
+                        background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 12, fontWeight: 800, color: T.accent,
+                      }}
+                    >
+                      {name.replace(/\(.*\)/, "").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {name}
+                    </span>
+                    <ServiceLock />
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Electricity sheet — same locked-catalogue pattern as Recharge:
+          the person's own country's electricity operators are listed and
+          real, but every row is locked (red) until live utility-payment
+          APIs are connected. */}
+      {showElectricity && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowElectricity(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, maxHeight: "72vh", display: "flex", flexDirection: "column", background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <FlagEmoji flag={dialCountry.flag} width={28} height={21} radius={6} />
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Electricity</span>
+              </span>
+              <button
+                onClick={() => setShowElectricity(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 14px", flexShrink: 0 }}>
+              Operators in {dialCountry.name} — unlocking soon
+            </p>
+
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", borderRadius: T.radiusMd, border: `1px solid ${T.line}` }}>
+              {(ELECTRICITY_BY_COUNTRY[dialCountry.iso] || []).length === 0 ? (
+                <div style={{ padding: "22px 18px", textAlign: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Coming soon</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
+                    Operators for {dialCountry.name} aren&apos;t listed yet.
+                  </div>
+                </div>
+              ) : (
+                ELECTRICITY_BY_COUNTRY[dialCountry.iso].map((name, i) => (
+                  <button
+                    key={name}
+                    onClick={() => showToast("Locked until live APIs connect")}
+                    aria-label={`${name} — locked`}
+                    className="v2-row"
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "13px 15px",
+                      border: "none",
+                      borderTop: i === 0 ? "none" : `1px solid ${T.line}`,
+                      background: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 36, height: 36, borderRadius: 11, flexShrink: 0,
+                        background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 12, fontWeight: 800, color: T.accent,
+                      }}
+                    >
+                      {name.replace(/\(.*\)/, "").trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {name}
+                    </span>
+                    <ServiceLock />
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* More — search bar up top, one scrollable list below: Recharge /
+          Electricity / Rent pinned first (reusing their own Bills
+          buttons' handlers), then Travel as an icon group, then the top
+          10 businesses. Full-screen like Add Bank / Coverage rather than
+          a bottom sheet, since the list can run long once search is in
+          play. */}
+      {showMore && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}>
+            <button
+              onClick={() => { setShowMore(false); setMoreQuery(""); setTravelExpanded(false); }}
+              aria-label="Back"
+              className="v2-tap"
+              style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+            >
+              <ArrowLeft size={18} color={T.ink} />
+            </button>
+            <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Pay & Services</span>
+          </div>
+
+          <div style={{ padding: "0 18px 10px", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: T.surface, border: `1px solid ${T.line}`, borderRadius: T.radiusMd, padding: "12px 14px", boxShadow: T.shadowCard }}>
+              <Search size={16} color={T.inkFaint} />
+              <input
+                value={moreQuery}
+                onChange={(e) => setMoreQuery(e.target.value)}
+                placeholder="Search businesses & services"
+                style={{ flex: 1, border: "none", outline: "none", background: "none", fontSize: 13.5, color: T.ink, fontFamily: "inherit" }}
+              />
+              {moreQuery && (
+                <button onClick={() => setMoreQuery("")} aria-label="Clear search" style={{ border: "none", background: "none", padding: 0, cursor: "pointer", display: "flex" }}>
+                  <X size={14} color={T.inkFaint} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 18 }}>
+            {(() => {
+              const q = moreQuery.trim().toLowerCase();
+              const pinned = [
+                { key: "recharge", label: "Recharge", Icon: Smartphone, onClick: () => { setShowMore(false); setShowRecharge(true); } },
+                { key: "electricity", label: "Electricity", Icon: Zap, onClick: () => { setShowMore(false); setShowElectricity(true); } },
+                { key: "rent", label: "Rent", Icon: Home, onClick: () => { setShowMore(false); setShowRentChoice(true); } },
+              ].filter((a) => !q || a.label.toLowerCase().includes(q));
+              const businesses = TOP_BUSINESSES.filter((b) => !q || b.label.toLowerCase().includes(q));
+              const travelMatches = TRAVEL_ACTIONS.filter((t) => t.label.toLowerCase().includes(q));
+              const showTravelSection = !q || travelMatches.length > 0;
+
+              return (
+                <>
+                  {pinned.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, margin: "2px 2px 8px" }}>
+                        Quick pay
+                      </div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        {pinned.map(({ key, label, Icon, onClick }) => (
+                          <button
+                            key={key}
+                            onClick={onClick}
+                            aria-label={label}
+                            className="v2-tap"
+                            style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 4px", border: `1px solid ${T.line}`, background: T.surface, borderRadius: 16, cursor: "pointer", boxShadow: T.shadowCard }}
+                          >
+                            <span style={{ width: 38, height: 38, borderRadius: 12, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <Icon size={18} color={T.accent} />
+                            </span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: T.ink }}>{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {showTravelSection && (
+                    <div>
+                      <button
+                        onClick={() => setTravelExpanded((v) => !v)}
+                        className="v2-tap"
+                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", border: "none", background: "none", padding: "2px 2px 8px", cursor: "pointer" }}
+                      >
+                        <span style={{ fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Travel</span>
+                        {travelExpanded || q ? <ChevronUp size={15} color={T.inkFaint} /> : <ChevronDown size={15} color={T.inkFaint} />}
+                      </button>
+                      {(travelExpanded || q) && (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                          {(q ? travelMatches : TRAVEL_ACTIONS).map(({ key, label, Icon }) => (
+                            <button
+                              key={key}
+                              onClick={() => { setShowMore(false); setPayTarget({ label, chip: null, Icon }); setPayAmount("25.00"); setPayTargetMethod(null); }}
+                              aria-label={label}
+                              className="v2-tap"
+                              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 4px", border: `1px solid ${T.line}`, background: T.surface, borderRadius: 16, cursor: "pointer", boxShadow: T.shadowCard }}
+                            >
+                              <span style={{ width: 38, height: 38, borderRadius: 12, background: T.positiveSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <Icon size={18} color={T.positive} />
+                              </span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: T.ink, textAlign: "center" }}>{label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, margin: "2px 2px 8px" }}>
+                      Top businesses
+                    </div>
+                    <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                      {businesses.length === 0 ? (
+                        <div style={{ padding: "22px 18px", textAlign: "center" }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>No matches</div>
+                          <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>Try a different search.</div>
+                        </div>
+                      ) : (
+                        businesses.map((b, i) => (
+                          <button
+                            key={b.key}
+                            onClick={() => { setShowMore(false); setPayTarget({ label: b.label, chip: b.chip, Icon: null }); setPayAmount("25.00"); setPayTargetMethod(null); }}
+                            aria-label={`Pay ${b.label}`}
+                            className="v2-row"
+                            style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "13px 15px", border: "none", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
+                          >
+                            <span style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: T.accent }}>
+                              {b.chip}
+                            </span>
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {b.label}
+                            </span>
+                            <ChevronRightIcon />
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Generic Pay sheet — opened from a business or Travel option in
+          More. Deliberately minimal: same functional core as Send Money
+          (amount in, confirm, done) without the receiver search, since
+          the "receiver" here is a fixed business rather than a person. */}
+      {payTarget && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 320, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setPayTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 34, height: 34, borderRadius: 11, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: T.accent }}>
+                  {payTarget.Icon ? <payTarget.Icon size={17} color={T.accent} /> : payTarget.chip}
+                </span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Pay {payTarget.label}</span>
+              </span>
+              <button
+                onClick={() => setPayTarget(null)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, marginBottom: 6 }}>Amount</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: T.surfaceAlt, border: `1px solid ${T.line}`, borderRadius: T.radiusMd, padding: "12px 14px", marginBottom: 18 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink }}>{ccy}</span>
+              <input
+                value={payAmount}
+                onChange={(e) => setPayAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                inputMode="decimal"
+                style={{ flex: 1, border: "none", outline: "none", background: "none", fontSize: 18, fontWeight: 800, color: T.ink, fontFamily: "inherit" }}
+              />
+            </div>
+
+            <button
+              onClick={() => { setPayTargetMethod(null); setPayTargetMethodOpen(true); }}
+              className="v2-tap"
+              style={{ width: "100%", border: "none", borderRadius: T.radiusMd, padding: "15px 0", color: "#fff", fontSize: 14, fontWeight: 800, background: T.gradButton, boxShadow: "0 8px 20px rgba(124,58,237,0.32)", cursor: "pointer" }}
+            >
+              Pay
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Funding source — the same four "Pay with" options Send Money
+          uses (Gloobal Bank / Gloobal PayLater / Gloobal Coin / Local
+          Banks), so every pay action in the app leads with the same
+          choice instead of some paths skipping straight to confirm. */}
+      {payTargetMethodOpen && payTarget && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 330, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setPayTargetMethodOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Pay with</span>
+              <button
+                onClick={() => setPayTargetMethodOpen(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 14px" }}>
+              {ccy}{(parseFloat(payAmount) || 0).toFixed(2)} to {payTarget.label}
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
+              {[
+                { key: "gbank", label: "Gloobal Bank" },
+                { key: "gpaylater", label: "Gloobal PayLater" },
+                { key: "gcoin", label: "Gloobal Coin" },
+                { key: "local", label: "Local Banks" },
+              ].map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    const amt = parseFloat(payAmount) || 0;
+                    setPayTargetMethod(label);
+                    setPayTargetMethodOpen(false);
+                    setPayTarget(null);
+                    showToast(`Paid ${ccy}${amt.toFixed(2)} to ${payTarget.label} · via ${label}`);
+                  }}
+                  className="v2-tap"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    width: "100%",
+                    border: "1px solid #ECECF3",
+                    background: "#fff",
+                    borderRadius: 16,
+                    padding: "12px 14px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 13,
+                      flexShrink: 0,
+                      background: key === "gbank" ? "linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%)" : "#F1EDFB",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {key === "gbank" ? (
+                      <img src={globalIdLogo} alt="" style={{ width: 26, height: 26, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
+                    ) : key === "gpaylater" ? (
+                      <CreditCard size={19} color="#7C3AED" />
+                    ) : key === "gcoin" ? (
+                      <Coins size={19} color="#7C3AED" />
+                    ) : (
+                      <Landmark size={19} color="#7C3AED" />
+                    )}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700, color: "#14122B" }}>{label}</span>
+                  <ChevronRight size={17} color="#B9B3CC" style={{ flexShrink: 0 }} />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showReceive && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowReceive(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Receive</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={() => setShowReceiveHistory(true)}
+                  aria-label="Receive money history"
+                  style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                >
+                  <History size={15} color={T.inkSoft} />
+                </button>
+                <button
+                  onClick={() => setShowReceive(false)}
+                  aria-label="Close"
+                  style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                >
+                  <X size={15} color={T.inkSoft} />
+                </button>
+              </div>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 14px" }}>Share this Gloobal ID to receive money</p>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                background: T.surfaceAlt,
+                border: `1px solid ${T.line}`,
+                borderRadius: T.radiusMd,
+                padding: "14px 16px",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
+                <FlagEmoji flag={dialCountry.flag} width={30} height={23} radius={6} />
+                <span style={{ fontSize: 15, fontWeight: 700, color: T.ink, fontFamily: T.fontDisplay, letterSpacing: 0.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {gloobalIdTag}
+                </span>
+              </span>
+              <button
+                onClick={() => {
+                  try {
+                    navigator?.clipboard?.writeText(gloobalIdTag);
+                  } catch {
+        // best-effort only — ignore
+      }
+                  showToast("Copied");
+                }}
+                aria-label="Copy Gloobal ID"
+                style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}
+              >
+                <Copy size={15} color={T.accent} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Receive money history — opened from the History icon on the
+          Receive sheet above. Same bottom-sheet shell, its own scrollable
+          list so it stacks over Receive without replacing it. */}
+      {showReceiveHistory && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 61, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowReceiveHistory(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, maxHeight: "72vh", display: "flex", flexDirection: "column", background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Receive History</span>
+              <button
+                onClick={() => setShowReceiveHistory(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", WebkitOverflowScrolling: "touch", borderRadius: T.radiusLg, background: T.surfaceAlt, border: `1px solid ${T.line}` }}>
+              {receivedRows.length === 0 && (
+                <div style={{ padding: "22px 0", textAlign: "center", fontSize: 12, color: T.inkFaint }}>
+                  Nothing received yet
+                </div>
+              )}
+              {receivedRows.map((t, i) => (
+                <div
+                  key={`${t.name}-${t.date}`}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+                >
+                  <span style={{ fontSize: 20, flexShrink: 0, lineHeight: 1 }}>{t.flag}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
+                    <span style={{ display: "block", fontSize: 11, color: T.inkFaint, marginTop: 1 }}>{t.date}</span>
+                  </span>
+                  <span style={{ textAlign: "right", flexShrink: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 800, color: T.positive }}>+{ccy}{t.amount.toFixed(2)}</span>
+                    <span style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: T.positive, marginTop: 1 }}>Received</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RENT — tapping the Bills row's Rent action opens this choice
+          first: Send Rent reuses the exact same flow as the main Send
+          action (onOpenSend → SendMoneyScreen); Accept Rent opens the QR
+          + Gloobal ID sheet below instead, since collecting rent is a
+          receiving action, not a sending one. */}
+      {showRentChoice && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowRentChoice(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Rent</span>
+              <button
+                onClick={() => setShowRentChoice(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 16px" }}>Paying rent, or collecting it?</p>
+            <div style={{ display: "flex", gap: 12 }}>
+              <button
+                onClick={() => {
+                  setShowRentChoice(false);
+                  onOpenSend();
+                }}
+                aria-label="Pay Rent"
+                className="v2-tap"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "20px 14px",
+                  border: `1px solid ${T.line}`,
+                  background: T.surfaceAlt,
+                  borderRadius: T.radiusLg,
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ width: 42, height: 42, borderRadius: 14, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <ArrowUp size={19} color={T.accent} />
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Pay Rent</span>
+                <span style={{ fontSize: 10.5, color: T.inkFaint, textAlign: "center", lineHeight: 1.4 }}>Pay your landlord</span>
+              </button>
+              <button
+                onClick={() => {
+                  setShowRentChoice(false);
+                  setShowRentReceive(true);
+                }}
+                aria-label="Accept Rent"
+                className="v2-tap"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "20px 14px",
+                  border: `1px solid ${T.line}`,
+                  background: T.surfaceAlt,
+                  borderRadius: T.radiusLg,
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ width: 42, height: 42, borderRadius: 14, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <ArrowDown size={19} color={T.accent} />
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Accept Rent</span>
+                <span style={{ fontSize: 10.5, color: T.inkFaint, textAlign: "center", lineHeight: 1.4 }}>Collect from a tenant</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ACCEPT RENT — the receiving side: a scannable QR plus the same
+          Gloobal ID as text, with its own copy and share icons so a
+          landlord can hand either the code or the ID itself to a tenant. */}
+      {showRentReceive && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(15,12,35,0.5)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+          onClick={() => setShowRentReceive(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxWidth: 430, background: T.surface, borderRadius: "26px 26px 0 0", padding: "26px 22px 34px", boxShadow: T.shadowFloat }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Accept Rent</span>
+              <button
+                onClick={() => setShowRentReceive(false)}
+                aria-label="Close"
+                style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: T.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+              >
+                <X size={15} color={T.inkSoft} />
+              </button>
+            </div>
+            <p style={{ fontSize: 12.5, color: T.inkSoft, margin: "0 0 16px" }}>Have your tenant scan this, or share your Gloobal ID directly</p>
+
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+              <div style={{ padding: 14, borderRadius: 16, background: T.surfaceAlt, border: `1px solid ${T.line}` }}>
+                <MockQRCode value={gloobalIdTag} />
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                background: T.surfaceAlt,
+                border: `1px solid ${T.line}`,
+                borderRadius: T.radiusMd,
+                padding: "14px 16px",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
+                <FlagEmoji flag={dialCountry.flag} width={30} height={23} radius={6} />
+                <span style={{ fontSize: 15, fontWeight: 700, color: T.ink, fontFamily: T.fontDisplay, letterSpacing: 0.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {gloobalIdTag}
+                </span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <button
+                  onClick={() => {
+                    try {
+                      navigator?.clipboard?.writeText(gloobalIdTag);
+                    } catch {
+        // best-effort only — ignore
+      }
+                    showToast("Copied");
+                  }}
+                  aria-label="Copy Gloobal ID"
+                  style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                >
+                  <Copy size={15} color={T.accent} />
+                </button>
+                <button
+                  onClick={handleShareGloobalId}
+                  aria-label="Share Gloobal ID"
+                  style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                >
+                  <Share2 size={15} color={T.accent} />
+                </button>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Profile settings sheet — one overlay for all the basic options.
+          Prototype-stage functionality: toggles toggle, selections select,
+          Paid/Received reuse the real Send/Receive flows. */}
+      {/* PayLater — balance, pending dues, and history. Prototype ledger:
+          all figures derive from one history array so nothing can drift. */}
+      {showPayLater && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}>
+            <button
+              onClick={() => setShowPayLater(false)}
+              aria-label="Back"
+              className="v2-tap"
+              style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+            >
+              <ArrowLeft size={18} color={T.ink} />
+            </button>
+            <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Gloobal Pay · PayLater</span>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Cross-link to My Assets — PayLater draws its whole limit from
+                the account's assets, so the two screens link both ways. */}
+            <button
+              type="button"
+              onClick={() => { setShowPayLater(false); setShowMyAssets(true); }}
+              className="v2-tap"
+              style={{ alignSelf: "flex-start", border: `1px solid ${T.line}`, background: T.surface, borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 800, color: T.accent, cursor: "pointer", boxShadow: T.shadowCard }}
+            >
+              View My Assets {"→"}
+            </button>
+
+            {/* Balance */}
+            <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "20px 18px" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft }}>Available PayLater balance</div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: T.accent, fontFamily: T.fontDisplay, marginTop: 4 }}>
+                {ccy}{paylaterAvailable.toFixed(2)}
+              </div>
+              <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>
+                {ccy}{paylaterAvailable.toFixed(2)} available of {ccy}{paylaterLimit.toFixed(2)}
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: T.surfaceAlt, marginTop: 12, overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${Math.min(100, (paylaterAvailable / (paylaterLimit || 1)) * 100)}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: T.gradButton,
+                  }}
+                />
+              </div>
+
+              {/* Limit tied to assets — tapping jumps to My Assets. */}
+              <button
+                type="button"
+                onClick={() => { setShowPayLater(false); setShowMyAssets(true); }}
+                className="v2-tap"
+                style={{ marginTop: 14, border: "none", background: T.accentSoft, borderRadius: T.radiusMd, padding: "10px 12px", width: "100%", textAlign: "left", color: T.accent, fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}
+              >
+                Your limit = your current assets ({ccy}{paylaterLimit.toFixed(2)}) {"→"}
+              </button>
+            </div>
+
+            {/* Pending dues */}
+            <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "18px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <span>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.inkSoft }}>Pending dues</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: paylaterPendingDues > 0 ? T.negative : T.positive, fontFamily: T.fontDisplay, marginTop: 3 }}>
+                    {ccy}{paylaterPendingDues.toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>
+                    {paylaterPendingDues > 0 ? "Due Aug 1" : "Nothing due — all clear"}
+                  </div>
+                </span>
+                {paylaterPendingDues > 0 && (
+                  <button
+                    onClick={() => showToast("Payments unlock with live APIs")}
+                    className="v2-tap"
+                    style={{
+                      border: "none",
+                      borderRadius: 999,
+                      padding: "10px 20px",
+                      fontSize: 12.5,
+                      fontWeight: 800,
+                      color: "#fff",
+                      background: T.gradButton,
+                      boxShadow: "0 6px 16px rgba(124,58,237,0.3)",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Pay now
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Activity — the account's own PayLater records, newest first:
+                charges it put on PayLater, repayments against them, and the
+                cashback credits that raised the limit. */}
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, margin: "4px 2px 8px" }}>
+                Activity
+              </div>
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                {paylaterStatus === "loading" ? (
+                  <div data-testid="paylater-loading" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "26px 16px", fontSize: 12.5, fontWeight: 700, color: T.inkFaint }}>
+                    <RotateCw size={15} color={T.inkFaint} style={{ animation: "iconAttention 0.9s linear infinite" }} />
+                    Loading…
+                  </div>
+                ) : paylaterStatus === "error" ? (
+                  <button
+                    type="button"
+                    data-testid="paylater-error"
+                    onClick={() => setPaylaterReload((n) => n + 1)}
+                    className="v2-row"
+                    style={{ width: "100%", border: "none", background: "none", padding: "24px 16px", fontSize: 12.5, fontWeight: 700, color: T.negative, cursor: "pointer" }}
+                  >
+                    Could not load history. Tap to retry.
+                  </button>
+                ) : paylaterActivity.length === 0 ? (
+                  <div data-testid="paylater-empty" style={{ padding: "26px 16px", textAlign: "center", fontSize: 12.5, fontWeight: 600, color: T.inkFaint }}>
+                    No PayLater activity yet.
+                  </div>
+                ) : (
+                  paylaterActivity.map((t, i) => {
+                    // Charges take money out; repayments and cashback credits
+                    // put it back — colour and sign follow that, not the row's
+                    // position in the list.
+                    const isCharge = t.type === "charge";
+                    const isCredit = t.type === "credit";
+                    const tint = isCharge ? T.negative : isCredit ? T.accent : T.positive;
+                    const tintSoft = isCharge ? T.surfaceAlt : isCredit ? T.accentSoft : T.positiveSoft;
+                    const amount = Number(t.amount) || 0;
+                    return (
+                      <div
+                        key={t.id || `${t.description}-${t.createdAt}-${i}`}
+                        data-testid="paylater-row"
+                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+                      >
+                        <span
+                          style={{
+                            width: 36, height: 36, borderRadius: 11, flexShrink: 0,
+                            background: tintSoft, display: "flex", alignItems: "center", justifyContent: "center",
+                          }}
+                        >
+                          {isCharge ? <ArrowUpRight size={17} color={tint} />
+                            : isCredit ? <Sprout size={16} color={tint} />
+                            : <ArrowDownLeft size={17} color={tint} />}
+                        </span>
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: "block", fontSize: 13.5, fontWeight: 700, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {t.description}
+                          </span>
+                          <span style={{ display: "block", fontSize: 11, color: T.inkFaint, marginTop: 1 }}>
+                            {t.createdAt ? new Date(t.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : ""}
+                          </span>
+                        </span>
+                        <span style={{ textAlign: "right", flexShrink: 0 }}>
+                          <span style={{ display: "block", fontSize: 13.5, fontWeight: 800, color: tint }}>
+                            {isCharge ? "−" : "+"}{ccy}{amount.toFixed(2)}
+                          </span>
+                          <span style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: T.inkFaint, marginTop: 1, textTransform: "capitalize" }}>
+                            {t.type}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Toast echo — this overlay (z 300) covers the dashboard's own
+              toast (z 50). */}
+          {toast && (
+            <div
+              style={{
+                position: "fixed",
+                bottom: 40,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 310,
+                background: T.ink,
+                color: "#fff",
+                padding: "11px 18px",
+                borderRadius: 999,
+                fontSize: 12.5,
+                fontWeight: 700,
+                boxShadow: "0 10px 24px rgba(20,18,43,0.3)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* My Assets — cashback that grows toward the amount paid. Opened from
+          the Accounts tab and cross-linked with PayLater both ways. */}
+      {/* Share with Gloobal users — the Creator picks what share of an
+          incoming payment goes back to whoever paid, before the receive
+          sheet opens. Either button carries on into Receive; only the
+          saved rate differs. */}
+      {showCreatorCashback && (
+        <MyShareScreen
+          ccy={ccy}
+          symbolId={myGloobalId}
+          initialRate={creatorRate}
+          onClose={() => setShowCreatorCashback(false)}
+          onSaved={(rate) => {
+            setCreatorRate(rate);
+            setShowCreatorCashback(false);
+            setShowReceive(true);
+            // Not rounded to a whole percent any more — 1.57% is now a rate
+            // someone can actually pick, so reporting it back as "2%" would
+            // contradict what they just saved.
+            showToast(`Sharing ${Number((rate * 100).toFixed(2))}% with Gloobal users`);
+          }}
+          onSkip={() => {
+            setShowCreatorCashback(false);
+            setShowReceive(true);
+          }}
+          onOpenAssets={() => {
+            setShowCreatorCashback(false);
+            setShowMyAssets(true);
+          }}
+        />
+      )}
+
+      {/* GH Score — opened from the Profile tab. */}
+      {showGHScore && <GHScoreScreen symbolId={myGloobalId} onClose={() => setShowGHScore(false)} />}
+
+      {showMyAssets && (
+        <MyAssetsScreen
+          ccy={ccy}
+          symbolId={myGloobalId}
+          onClose={() => setShowMyAssets(false)}
+          onOpenPayLater={() => { setShowMyAssets(false); setShowPayLater(true); }}
+        />
+      )}
+
+      {profileDetail && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}>
+            <button
+              onClick={() => setProfileDetail(null)}
+              aria-label="Back"
+              className="v2-tap"
+              style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+            >
+              <ArrowLeft size={18} color={T.ink} />
+            </button>
+            <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>{profileDetail}</span>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", padding: "6px 18px 30px" }}>
+            {profileDetail === "Personal Details" && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                {/* Name row doubles as a flip control — tapping it cycles
+                    the same four identity faces used elsewhere in the app
+                    (name → Gloobal ID → mobile number → country name),
+                    via the shared IDENTITY_DISPLAY_ORDER/identityDisplayValue
+                    helpers, instead of listing every field as a flat row. */}
+                <button
+                  onClick={() => setPersonalDisplayMode((m) => nextIdentityMode(m))}
+                  className="v2-row"
+                  style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", border: "none", background: "none", cursor: "pointer", textAlign: "left" }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}>
+                    {IDENTITY_DISPLAY_LABEL[personalDisplayMode][0].toUpperCase() + IDENTITY_DISPLAY_LABEL[personalDisplayMode].slice(1)}
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {identityDisplayValue(
+                        {
+                          name: fullName || "Gloobal ID Member",
+                          id: myGloobalId || "—",
+                          phone: `${dialCountry.dialCode} ${phoneNumber || "•••• •• ••"}`,
+                          country: dialCountry.name,
+                        },
+                        personalDisplayMode
+                      )}
+                    </span>
+                    <RotateCw size={13} color={T.inkFaint} />
+                  </span>
+                </button>
+                {[
+                  ["Dial code", dialCountry.dialCode],
+                  ["Member since", "2026"],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: T.inkSoft }}>{k}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {profileDetail === "Paid" && (
+              <ProfileMoneySection
+                rows={filterMoneyRows(sentRows, paidFilter)}
+                filter={paidFilter}
+                onFilterChange={setPaidFilter}
+                color={T.accent}
+                chip={T.accentSoft}
+                sign="−"
+                ccy={ccy}
+                status={moneyStatus}
+                onRetry={() => setMoneyReload((n) => n + 1)}
+                ctaLabel="Send Money"
+                onCta={() => { setProfileDetail(null); onOpenSend(); }}
+              />
+            )}
+
+            {profileDetail === "Received" && (
+              <ProfileMoneySection
+                rows={filterMoneyRows(receivedRows, receivedFilter)}
+                filter={receivedFilter}
+                onFilterChange={setReceivedFilter}
+                color={T.positive}
+                chip={T.positiveSoft}
+                sign="+"
+                ccy={ccy}
+                status={moneyStatus}
+                onRetry={() => setMoneyReload((n) => n + 1)}
+                ctaLabel="Receive Money"
+                onCta={() => { setProfileDetail(null); setShowReceive(true); }}
+              />
+            )}
+
+            {profileDetail === "Language" && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                {PROFILE_LANGUAGES.map((lang, i) => (
+                  <button
+                    key={lang}
+                    onClick={() => setProfileLanguage(lang)}
+                    className="v2-row"
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
+                  >
+                    <span style={{ fontSize: 13.5, fontWeight: profileLanguage === lang ? 800 : 600, color: profileLanguage === lang ? T.accent : T.ink }}>{lang}</span>
+                    {profileLanguage === lang && <Check size={17} color={T.accent} />}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {profileDetail === "Security" && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px" }}>
+                  <span>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Biometric login</div>
+                    <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>Use Face ID or fingerprint to log in</div>
+                  </span>
+                  <ProfileToggle on={profileToggles.biometric} onToggle={() => flipToggle("biometric")} label="Biometric login" />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: `1px solid ${T.line}` }}>
+                  <span>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>App lock</div>
+                    <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>Ask for your PIN every time the app opens</div>
+                  </span>
+                  <ProfileToggle on={profileToggles.appLock} onToggle={() => flipToggle("appLock")} label="App lock" />
+                </div>
+                <button
+                  onClick={() => showToast("PIN change will be available soon")}
+                  className="v2-row"
+                  style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
+                >
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>Change PIN</span>
+                  <ChevronRightIcon />
+                </button>
+              </div>
+            )}
+
+            {profileDetail === "Notifications" && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                {[
+                  ["txAlerts", "Transaction alerts", "Money sent, received, and requests"],
+                  ["referralAlerts", "Referral earnings", "When your network earns you a share"],
+                  ["promos", "Offers & promotions", "Occasional deals from Gloobal ID"],
+                ].map(([key, title, sub], i) => (
+                  <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "15px 18px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}>
+                    <span>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>{title}</div>
+                      <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 1 }}>{sub}</div>
+                    </span>
+                    <ProfileToggle on={profileToggles[key]} onToggle={() => flipToggle(key)} label={title} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {profileDetail === "Help & Support" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                  {["How do I send money?", "How do referrals work?", "Which countries are supported?"].map((q, i) => (
+                    <button
+                      key={q}
+                      onClick={() => showToast("Full help center coming soon")}
+                      className="v2-row"
+                      style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: i === 0 ? "none" : `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{q}</span>
+                      <ChevronRightIcon />
+                    </button>
+                  ))}
+                </div>
+                <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "16px 18px" }}>
+                  <div style={{ fontSize: 12, color: T.inkFaint }}>Need more help?</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: T.accent, marginTop: 2 }}>support@gloobal.id</div>
+                </div>
+              </div>
+            )}
+
+            {profileDetail === "About" && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px" }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600, color: T.inkSoft }}>Version</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>1.0.0 (prototype)</span>
+                </div>
+                {["Terms of Service", "Privacy Policy"].map((label) => (
+                  <button
+                    key={label}
+                    onClick={() => showToast(`${label} coming soon`)}
+                    className="v2-row"
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "15px 18px", border: "none", borderTop: `1px solid ${T.line}`, background: "none", cursor: "pointer", textAlign: "left" }}
+                  >
+                    <span style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{label}</span>
+                    <ChevronRightIcon />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* The sheet sits above the dashboard's own toast (z 50 vs this
+              sheet's 300), so the toast is echoed here for actions
+              triggered from inside the sheet. */}
+          {toast && (
+            <div
+              style={{
+                position: "fixed",
+                bottom: 40,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 310,
+                background: T.ink,
+                color: "#fff",
+                padding: "11px 18px",
+                borderRadius: 999,
+                fontSize: 12.5,
+                fontWeight: 700,
+                boxShadow: "0 10px 24px rgba(20,18,43,0.3)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
+      {profileOverlay === "share" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+            <SendMoneyAmbientBg />
+          </div>
+
+          <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <button
+                onClick={() => setProfileOverlay(null)}
+                aria-label="Back"
+                className="v2-tap"
+                style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}
+              >
+                <ArrowLeft size={18} color={T.ink} />
+              </button>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Share your Gloobal ID</span>
+            </div>
+
+            {/* User/Merchant flip — lives on the header row now, opposite
+                the back button, instead of floating on the ID card's top
+                edge: navigation on one side, the flip sign on the other. */}
+            <button
+              onClick={toggleShareRole}
+              aria-label={shareRole === "user" ? "Switch to Creators profile" : "Switch to User profile"}
+              className="v2-tap"
+              style={{
+                flexShrink: 0,
+                transform: `rotateY(${roleFlipping ? 90 : 0}deg)`,
+                transition: "transform 0.18s ease",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 40, height: 40, borderRadius: "50%",
+                border: "none",
+                background: shareRole === "merchant" ? "#FEF3E2" : T.accentSoft,
+                boxShadow: T.shadowCard,
+                cursor: "pointer",
+              }}
+            >
+              {shareRole === "merchant" ? <Store size={17} color="#F59E0B" /> : <User size={17} color={T.accent} />}
+            </button>
+          </div>
+
+          <div style={{ position: "relative", zIndex: 1, flex: 1, overflowY: "auto", padding: "6px 18px 30px", display: "flex", flexDirection: "column", alignItems: "center", gap: 18 }}>
+            <div
+              style={{
+                position: "relative",
+                width: "100%",
+                maxWidth: 360,
+                minHeight: 220,
+                background: T.surface,
+                borderRadius: T.radiusLg,
+                boxShadow: T.shadowCard,
+                padding: 22,
+              }}
+            >
+              <div style={{ position: "absolute", top: 22, left: 22 }}>
+                <FlagEmoji flag={dialCountry.flag} width={60} height={44} radius={14} dropShadow="drop-shadow(0 4px 10px rgba(76,29,149,0.20))" />
+              </div>
+
+              <span
+                style={{
+                  position: "absolute", top: 22, right: 22,
+                  width: 50, height: 50, borderRadius: "50%",
+                  overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: "0 4px 10px rgba(76,29,149,0.16)", flexShrink: 0,
+                }}
+              >
+                <img
+                  src={`https://i.pravatar.cc/150?img=${avatarSeed}`}
+                  alt="Profile"
+                  width={50}
+                  height={50}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              </span>
+
+              <div
+                style={{
+                  position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                  display: "flex", alignItems: "center", gap: 2, whiteSpace: "nowrap",
+                }}
+              >
+                {shareableGloobalId.split("").map((ch, i) => (
+                  <React.Fragment key={i}>
+                    <span
+                      style={{
+                        fontSize: 20, fontWeight: 800, letterSpacing: 0.5, fontFamily: T.fontDisplay,
+                        color: POSITION_COLORS[i % POSITION_COLORS.length],
+                      }}
+                    >
+                      {ch}
+                    </span>
+                    {(i + 1) % 4 === 0 && i !== shareableGloobalId.length - 1 && <span style={{ width: 8 }} />}
+                  </React.Fragment>
+                ))}
+              </div>
+
+              <button
+                onClick={handleCopyReferralLink}
+                aria-label="Copy"
+                className="v2-tap"
+                style={{ position: "absolute", bottom: 22, left: 22, border: "none", background: "none", padding: 4, cursor: "pointer", display: "flex" }}
+              >
+                <Copy size={22} color={T.accent} />
+              </button>
+
+              <button
+                onClick={handleShareReferralLink}
+                aria-label="Share"
+                className="v2-tap"
+                style={{ position: "absolute", bottom: 22, right: 22, border: "none", background: "none", padding: 4, cursor: "pointer", display: "flex" }}
+              >
+                <Share2 size={22} color={T.accent} />
+              </button>
+            </div>
+          </div>
+
+          {toast && (
+            <div
+              style={{
+                position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+                background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                whiteSpace: "nowrap", boxShadow: T.shadowFloat,
+              }}
+            >
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
+      {profileOverlay === "changeId" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: T.bg, display: "flex", flexDirection: "column", fontFamily: T.fontBody }}>
+          <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 12, padding: "18px 18px 10px" }}>
+            <button
+              onClick={closeChangeId}
+              aria-label="Back"
+              className="v2-tap"
+              style={{
+                width: 34, height: 34, borderRadius: 12, flexShrink: 0,
+                border: `1px solid ${T.line}`, background: T.surface,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+              }}
+            >
+              <ArrowLeft size={18} color={T.ink} />
+            </button>
+            <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>Change Gloobal ID</span>
+
+            {/* The record of past IDs is reference material, not part of
+                choosing a new one — so it sits in the corner as a control
+                you open, rather than below the dial pad where it competes
+                with the ID being typed. */}
+            <button
+              onClick={() => {
+                // Each open starts at the five most recent again, so
+                // "View all" is a deliberate act rather than sticky state.
+                setIdHistoryExpanded(false);
+                setShowIdHistory(true);
+              }}
+              data-testid="id-history-button"
+              aria-label="ID history"
+              className="v2-tap"
+              style={{
+                marginLeft: "auto",
+                width: 34, height: 34, borderRadius: 12, flexShrink: 0,
+                border: `1px solid ${T.line}`, background: T.surface,
+                display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+              }}
+            >
+              <History size={17} color={T.ink} />
+            </button>
+          </div>
+
+          <div style={{ position: "relative", zIndex: 1, flex: 1, overflowY: "auto", padding: "6px 18px 30px", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+            {/* What it is now, so the two can be compared before committing. */}
+            <div style={{ width: "100%", maxWidth: 360, borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: T.inkFaint, marginBottom: 8 }}>
+                Current Gloobal ID
+              </div>
+              <div data-testid="current-gloobal-id" style={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                {shareableGloobalId.split("").map((ch, i) => (
+                  <span key={i} style={{ fontSize: 17, fontWeight: 800, fontFamily: T.fontDisplay, color: POSITION_COLORS[i % POSITION_COLORS.length] }}>
+                    {ch}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ width: "100%", maxWidth: 360, borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: T.accent, marginBottom: 10 }}>
+                New Gloobal ID
+              </div>
+              <SymbolChipRow length={SYMBOL_ID_LENGTH} value={newIdValue} masked={false} />
+            </div>
+
+            {/* One live line about the ID being typed — never two at once. */}
+            {newIdStatus === "checking" && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: T.inkFaint }}>Checking…</div>
+            )}
+            {newIdStatus === "available" && (
+              <div data-testid="new-id-available" style={{ fontSize: 12.5, fontWeight: 800, color: T.positive }}>Available ✓</div>
+            )}
+            {newIdStatus === "same" && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: T.inkFaint, textAlign: "center" }}>
+                That&apos;s already your Gloobal ID.
+              </div>
+            )}
+            {newIdStatus === "taken" && (
+              <div style={{ width: "100%", maxWidth: 360 }}>
+                <div data-testid="new-id-taken" style={{ fontSize: 12, fontWeight: 700, color: "#EF4444", textAlign: "center" }}>
+                  Already taken
+                </div>
+                <IdSuggestionsPanel suggestions={newIdSuggestions} onPick={setNewIdValue} />
+              </div>
+            )}
+            {newIdStatus === "unknown" && (
+              <div
+                data-testid="new-id-unknown"
+                style={{ maxWidth: 320, fontSize: 12, fontWeight: 700, color: "#B45309", textAlign: "center" }}
+              >
+                Couldn&apos;t check this ID right now. Check your connection and try again.
+              </div>
+            )}
+            {changeIdError && (
+              <div data-testid="change-id-error" style={{ maxWidth: 320, fontSize: 12, fontWeight: 700, color: "#EF4444", textAlign: "center" }}>
+                {changeIdError}
+              </div>
+            )}
+
+            <div style={{ width: "100%", maxWidth: 360 }}>
+              <SymbolDialPad value={newIdValue} onChange={setNewIdValue} length={SYMBOL_ID_LENGTH} />
+            </div>
+
+            <button
+              onClick={handleConfirmIdChange}
+              disabled={newIdStatus !== "available" || changingId}
+              style={{
+                width: "100%", maxWidth: 360, padding: "14px 18px", borderRadius: T.radiusMd, border: "none",
+                background: newIdStatus === "available" && !changingId ? T.accent : T.line,
+                color: newIdStatus === "available" && !changingId ? "#fff" : T.inkFaint,
+                fontSize: 14, fontWeight: 800, fontFamily: T.fontDisplay,
+                cursor: newIdStatus === "available" && !changingId ? "pointer" : "not-allowed",
+              }}
+            >
+              {changingId ? "Updating…" : "Update ID"}
+            </button>
+
+            <button
+              onClick={closeChangeId}
+              disabled={changingId}
+              style={{
+                border: "none", background: "none", color: T.accent2,
+                fontSize: 12.5, fontWeight: 700, padding: "6px 8px",
+                cursor: changingId ? "default" : "pointer",
+              }}
+            >
+              Cancel
+            </button>
+
+          </div>
+
+          {/* ID History — a dated record of which Gloobal ID belonged to this
+              account when, so a rename leaves a trail instead of quietly
+              overwriting the old identity. Capped at the five most recent:
+              past that it stops being a reference and becomes an archive. */}
+          {showIdHistory && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="ID history"
+              onClick={() => setShowIdHistory(false)}
+              style={{
+                position: "fixed", inset: 0, zIndex: 320, background: "rgba(20,12,36,0.5)",
+                display: "flex", alignItems: "flex-end", justifyContent: "center",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "100%", maxWidth: 440, background: T.bg,
+                  borderRadius: `${T.radiusLg}px ${T.radiusLg}px 0 0`,
+                  boxShadow: T.shadowFloat, padding: "18px 18px calc(24px + env(safe-area-inset-bottom, 0px))",
+                  maxHeight: "72vh", display: "flex", flexDirection: "column",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12, paddingBottom: 12 }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>ID History</span>
+                  <button
+                    onClick={() => setShowIdHistory(false)}
+                    aria-label="Close ID history"
+                    className="v2-tap"
+                    style={{
+                      marginLeft: "auto", width: 30, height: 30, borderRadius: "50%",
+                      border: "none", background: T.surfaceAlt, display: "flex",
+                      alignItems: "center", justifyContent: "center", cursor: "pointer",
+                    }}
+                  >
+                    <X size={16} color={T.inkSoft} />
+                  </button>
+                </div>
+
+                <div style={{ overflowY: "auto", borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard }}>
+                  {recentIdHistory.length === 0 ? (
+                    <div data-testid="id-history-empty" style={{ padding: "18px 16px", fontSize: 12.5, color: T.inkFaint, fontWeight: 600 }}>
+                      No previous IDs
+                    </div>
+                  ) : (
+                    recentIdHistory.map((entry, i) => {
+                      const action = idHistoryAction(entry);
+                      const created = action === "created";
+                      return (
+                        <div
+                          key={`${entry.symbolId}-${action}-${idHistoryAt(entry)}`}
+                          data-testid="id-history-row"
+                          data-history-action={action}
+                          style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "13px 16px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}
+                        >
+                          {/* Green for the ID this account started with,
+                              purple for every rename after it — the two
+                              kinds of entry are answering different
+                              questions and shouldn't scan as one list. */}
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 8, height: 8, borderRadius: "50%", flexShrink: 0, marginTop: 5,
+                              background: created ? T.positive : T.accent,
+                            }}
+                          />
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            {/* Same symbol font as everywhere else the Gloobal
+                                ID is shown, so the glyphs render identically. */}
+                            <span style={{ display: "block", fontSize: 14, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay, letterSpacing: 0.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {entry.symbolId}
+                            </span>
+                            <span style={{ display: "block", fontSize: 14, color: T.inkFaint, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {created ? "Created" : `Changed from: ${entry.symbolId}`}
+                            </span>
+                            {!created && entry.replacedBy && (
+                              <span style={{ display: "block", fontSize: 14, color: T.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                Replaced by: {entry.replacedBy}
+                              </span>
+                            )}
+                            <span style={{ display: "block", fontSize: 12, color: T.inkFaint, marginTop: 2 }}>
+                              {formatIdChangedAt(idHistoryAt(entry))}
+                            </span>
+                          </span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, flexShrink: 0 }}>#{recentIdHistory.length - i}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* The cap is a default, not a ceiling. Someone who has
+                    renamed more than five times still has a way to see the
+                    whole trail. */}
+                {!idHistoryExpanded && idHistory.length > 5 && (
+                  <button
+                    type="button"
+                    data-testid="id-history-view-all"
+                    onClick={() => setIdHistoryExpanded(true)}
+                    className="v2-tap"
+                    style={{
+                      marginTop: 10, border: "none", background: "none", color: T.accent,
+                      fontSize: 12.5, fontWeight: 800, cursor: "pointer", padding: "6px 4px",
+                      alignSelf: "center",
+                    }}
+                  >
+                    View all ({idHistory.length})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Biometric confirmation — mandatory, and always ahead of the API
+              call. Cancelling or failing here leaves the Gloobal ID alone. */}
+          {bioConfirm && (
+            <div
+              data-testid="id-biometric-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm to update your Gloobal ID"
+              style={{
+                position: "fixed", inset: 0, zIndex: 400, background: "rgba(20,12,36,0.55)",
+                display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+              }}
+            >
+              <div
+                style={{
+                  width: "100%", maxWidth: 340, background: T.surface, borderRadius: T.radiusLg,
+                  boxShadow: T.shadowFloat, padding: "28px 22px 22px",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
+                }}
+              >
+                <span
+                  style={{
+                    width: 88, height: 88, borderRadius: "50%", border: `1.5px solid ${T.line}`,
+                    background: T.surface, boxShadow: T.shadowCard,
+                    display: "flex", alignItems: "center", justifyContent: "center", color: T.accent,
+                  }}
+                >
+                  <Fingerprint size={64} />
+                </span>
+
+                <span style={{ fontSize: 14, fontWeight: 800, color: T.ink, textAlign: "center", lineHeight: 1.4 }}>
+                  Confirm with fingerprint or Face ID to update your Gloobal ID
+                </span>
+
+                {bioConfirm.message && (
+                  <span
+                    data-testid="id-biometric-message"
+                    style={{ fontSize: 12, fontWeight: 700, color: bioConfirm.stage === "error" ? T.negative : T.inkSoft, textAlign: "center", lineHeight: 1.45 }}
+                  >
+                    {bioConfirm.message}
+                  </span>
+                )}
+
+                {bioConfirm.stage === "pin" && (
+                  <div style={{ width: "100%" }}>
+                    <div style={{ display: "flex", justifyContent: "center", gap: 12, margin: "4px 0 14px" }}>
+                      {[0, 1, 2, 3, 4, 5].map((i) => (
+                        <span
+                          key={i}
+                          style={{
+                            width: 12, height: 12, borderRadius: "50%",
+                            background: i < bioPin.length ? T.accent : T.line,
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <PhoneDialPad value={bioPin} onChange={setBioPin} minLength={6} maxLength={6} />
+                    <button
+                      onClick={handleBioPinSubmit}
+                      disabled={bioPin.length < 6 || changingId}
+                      data-testid="id-pin-confirm"
+                      className="v2-tap"
+                      style={{
+                        width: "100%",
+                        marginTop: 16,
+                        border: "none",
+                        borderRadius: T.radiusMd,
+                        padding: "13px 0",
+                        fontSize: 13.5,
+                        fontWeight: 800,
+                        color: bioPin.length < 6 ? T.inkFaint : "#fff",
+                        background: bioPin.length < 6 ? T.line : T.gradButton,
+                        cursor: bioPin.length < 6 ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {changingId ? "Updating…" : "Confirm PIN"}
+                    </button>
+                  </div>
+                )}
+
+                {bioConfirm.stage === "error" && (
+                  <button
+                    onClick={() => setBioConfirm({ stage: "prompt", message: null })}
+                    className="v2-tap"
+                    style={{ width: "100%", border: "none", borderRadius: T.radiusMd, padding: "13px 0", color: "#fff", fontSize: 13.5, fontWeight: 800, background: T.gradButton, cursor: "pointer" }}
+                  >
+                    Try again
+                  </button>
+                )}
+
+                <button
+                  onClick={() => { setBioConfirm(null); setBioPin(""); }}
+                  style={{ border: "none", background: "none", color: T.inkFaint, fontSize: 12.5, fontWeight: 700, padding: "4px 8px", cursor: "pointer" }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {toast && (
+            <div
+              style={{
+                position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+                background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                whiteSpace: "nowrap", boxShadow: T.shadowFloat,
+              }}
+            >
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
+      {profileOverlay === "referral" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300, background: T.bg, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div aria-hidden="true" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+            <SendMoneyAmbientBg />
+          </div>
+
+          <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 12, padding: "calc(18px + env(safe-area-inset-top, 0px)) 18px 14px", flexShrink: 0 }}>
+            <button
+              onClick={() => setProfileOverlay(null)}
+              aria-label="Back"
+              className="v2-tap"
+              style={{ width: 40, height: 40, borderRadius: "50%", border: "none", background: T.surface, boxShadow: T.shadowCard, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+            >
+              <ArrowLeft size={18} color={T.ink} />
+            </button>
+          </div>
+
+          <div style={{ position: "relative", zIndex: 1, flex: 1, overflowY: "auto", padding: "6px 18px 30px", display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Earnings summary */}
+            <div style={{ position: "relative", background: T.gradWallet, borderRadius: T.radiusLg, padding: "22px 22px 52px", display: "flex", flexDirection: "column", gap: 4, boxShadow: T.shadowRaised }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.7)", letterSpacing: 0.3, textTransform: "uppercase" }}>
+                People you&apos;ve referred
+              </span>
+              {/* Counts come from the referral rows the backend actually
+                  holds. There is no earnings ledger behind referrals yet,
+                  so no money figure is claimed here. */}
+              <span style={{ fontSize: 30, fontWeight: 800, color: "#fff", fontFamily: T.fontDisplay }}>
+                {referrals.length}
+              </span>
+              <div style={{ display: "flex", gap: 18, marginTop: 10 }}>
+                <div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#fff" }}>
+                    {referrals.length || (typeof referralCount === "number" ? referralCount : 0)}
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>Invited</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#fff" }}>
+                    {referrals.filter((r) => r.status === "completed").length}
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>Completed</div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setProfileOverlay("share")}
+                aria-label="Share your referral link"
+                className="v2-tap"
+                style={{
+                  position: "absolute", bottom: 16, right: 20,
+                  width: 40, height: 40, borderRadius: "50%", border: "none",
+                  background: "rgba(255,255,255,0.16)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+                }}
+              >
+                <Share2 size={18} color="#fff" />
+              </button>
+            </div>
+
+            {/* How the network works */}
+            <button
+              onClick={() => setShowHowItWorks(true)}
+              className="v2-tap"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: "none", background: T.gradButton, borderRadius: T.radiusMd, padding: "14px 0", color: "#fff", fontSize: 13.5, fontWeight: 800, cursor: "pointer", boxShadow: "0 8px 20px rgba(124,58,237,0.32)" }}
+            >
+              <Info size={16} color="#fff" />
+              How your network works
+            </button>
+
+            {/* Network list — the real referral rows, newest first (the
+                backend already sorts by createdAt descending). Loading,
+                empty, and error each get their own state rather than an
+                indistinguishable blank card. */}
+            {referralsLoading && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "28px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                <span
+                  aria-label="Loading referrals"
+                  role="status"
+                  style={{
+                    width: 26, height: 26, borderRadius: "50%",
+                    border: `3px solid ${T.line}`, borderTopColor: T.accent,
+                    animation: "spin 0.8s linear infinite",
+                  }}
+                />
+                <span style={{ fontSize: 12.5, color: T.inkFaint, fontWeight: 600 }}>Loading your referrals…</span>
+              </div>
+            )}
+
+            {!referralsLoading && referralsError && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "24px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "center" }}>{referralsError}</span>
+                <button
+                  onClick={() => setReferralsAttempt((n) => n + 1)}
+                  className="v2-tap"
+                  style={{
+                    border: "none", background: T.gradButton, color: "#fff", borderRadius: T.radiusMd,
+                    padding: "10px 22px", fontSize: 13, fontWeight: 800, cursor: "pointer",
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {!referralsLoading && !referralsError && referrals.length === 0 && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, boxShadow: T.shadowCard, padding: "28px 22px", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                <Users2 size={22} color={T.inkFaint} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.ink, textAlign: "center" }}>
+                  No referrals yet. Share your Gloobal ID to invite friends.
+                </span>
+              </div>
+            )}
+
+            {!referralsLoading && !referralsError && referrals.length > 0 && (
+              <div style={{ borderRadius: T.radiusLg, background: T.surface, overflow: "hidden", boxShadow: T.shadowCard }}>
+                {referrals.map((r, i) => (
+                  <div
+                    key={`${r.referredSymbolId}-${r.createdAt}`}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 12, padding: "14px 18px",
+                      borderTop: i === 0 ? "none" : `1px solid ${T.line}`,
+                    }}
+                  >
+                    <span style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <User size={18} color={T.accent} />
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: T.ink, letterSpacing: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {r.referredSymbolId}
+                      </div>
+                      <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600, marginTop: 2 }}>
+                        {formatJoinedDate(r.createdAt)}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: r.status === "completed" ? T.positive : T.inkFaint, textTransform: "capitalize" }}>
+                      {r.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {toast && (
+            <div
+              style={{
+                position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+                background: T.ink, color: "#fff", padding: "11px 18px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                whiteSpace: "nowrap", boxShadow: T.shadowFloat,
+              }}
+            >
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Explains how earning through the referral network works — opened
+          from the option that replaced the old "Invite a friend" CTA. */}
+      {showHowItWorks && (
+        <div
+          onClick={() => setShowHowItWorks(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 400, background: "rgba(20,12,36,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative", width: "100%", maxWidth: 340,
+              background: T.surface, borderRadius: T.radiusLg, boxShadow: T.shadowFloat,
+              padding: "28px 24px 24px", display: "flex", flexDirection: "column", gap: 18,
+            }}
+          >
+            <button
+              onClick={() => setShowHowItWorks(false)}
+              aria-label="Close"
+              className="v2-tap"
+              style={{
+                position: "absolute", top: 14, right: 14, width: 32, height: 32, borderRadius: "50%",
+                border: "none", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+              }}
+            >
+              <X size={16} color={T.inkFaint} />
+            </button>
+
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, textAlign: "center" }}>
+              <div style={{ width: 52, height: 52, borderRadius: "50%", background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Users2 size={24} color={T.accent} />
+              </div>
+              <span style={{ fontSize: 16, fontWeight: 800, color: T.ink, fontFamily: T.fontDisplay }}>
+                How your network works
+              </span>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Share2 size={16} color={T.accent} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Share your link</div>
+                  <div style={{ fontSize: 12, color: T.inkFaint, lineHeight: 1.4, marginTop: 2 }}>
+                    Your Gloobal ID doubles as your invite link. Send it to friends and family.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Users2 size={16} color={T.accent} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>They join your network</div>
+                  <div style={{ fontSize: 12, color: T.inkFaint, lineHeight: 1.4, marginTop: 2 }}>
+                    Once they sign up and become active, they show up in your network list.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: T.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Gift size={16} color={T.accent} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>You earn together</div>
+                  <div style={{ fontSize: 12, color: T.inkFaint, lineHeight: 1.4, marginTop: 2 }}>
+                    Every time they send money, a share of the fee is added straight to your balance — tracked today and all-time for each person.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowHowItWorks(false)}
+              className="v2-tap"
+              style={{ border: "none", background: T.gradButton, borderRadius: T.radiusMd, padding: "13px 0", color: "#fff", fontSize: 13.5, fontWeight: 800, cursor: "pointer", boxShadow: "0 8px 20px rgba(124,58,237,0.32)" }}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Memoized: this screen is only ever (re)rendered while the "dashboard"
+// stage is active, but its parent (App) re-renders periodically on its
+// own (e.g. the background particle animation) — memoizing skips that
+// work here whenever this screen's actual props haven't changed.
+export const DashboardScreen = React.memo(DashboardScreenBase);
