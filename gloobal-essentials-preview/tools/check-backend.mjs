@@ -92,17 +92,27 @@ await check("warm up (fire and forget)", async () => {
 });
 
 console.log("\nLookup — reaches MongoDB and answers");
+// GET /api/users/resolve is signed-in only. It answers with a real name, a
+// mobile number and a cashback rate, and it accepts a phone number as the
+// identifier, so leaving it open made it a directory of the platform's users
+// and a phone-number-to-account oracle. This runs with no token, so the only
+// correct answer is 401 — and asserting that is what keeps the route from
+// quietly becoming public again.
+//
+// This check used to expect the 404 "no registered user" message, from back
+// when the route was unauthenticated. It has been failing ever since the route
+// was closed, against a backend that was behaving exactly as intended.
 await check(
-  "resolveUser(unregistered) rejects with the backend's own message",
+  "resolveUser(unregistered) is refused without a token",
   async () => {
     try {
       await GloobalApi.resolveUser(UNUSED_ID);
-      return "RESOLVED (unexpected)";
+      return { status: "RESOLVED (unexpected)" };
     } catch (err) {
-      return err.message;
+      return { status: err.status, message: err.message };
     }
   },
-  (v) => (/no registered user|not found|no user/i.test(v) ? true : `expected a not-found message, got ${JSON.stringify(v)}`)
+  (v) => (v.status === 401 ? true : `expected HTTP 401, got ${JSON.stringify(v)}`)
 );
 
 await check(

@@ -16,16 +16,19 @@
 // transfer that already happened — see settleCrossBorderPayment's own
 // try/catch for how that's enforced.
 //
-// A same-currency payment — by far the common case today, since every
-// account defaults to countryIso 'IN' until users start setting a real one
-// — is not a "trivial settlement" here. It's not a cross-border payment at
-// all, so this returns null for it without creating any pool or settlement
-// row, or making the live FX call. Only a genuine currency mismatch does.
+// A same-currency payment is not a "trivial settlement" here. It's not a
+// cross-border payment at all, so this returns null for it without creating
+// any pool or settlement row, or making the live FX call. Only a genuine
+// currency mismatch does.
 const crypto = require('crypto');
 const Country = require('../models/Country');
 const CountryCurrencyPool = require('../models/CountryCurrencyPool');
 const Settlement = require('../models/Settlement');
 const { getRate } = require('./fxRates');
+// The same country-of-record rule server.js reports to the payer. Reading
+// the raw countryIso here instead would settle a payment in a currency the
+// sender's own screen never showed them — see accountCountry.js's header.
+const { accountCountryIso } = require('./accountCountry');
 
 // Deliberately excludes 0/O/1/I — this ID ends up on a receipt someone may
 // read aloud or copy by hand, same reasoning as the Secure ID symbol set
@@ -75,9 +78,11 @@ async function getCountry(iso) {
  */
 async function settleCrossBorderPayment({ transaction, sender, receiver, amount }) {
   try {
+    const senderIso = accountCountryIso(sender);
+    const receiverIso = accountCountryIso(receiver);
     const [sourceCountry, destinationCountry] = await Promise.all([
-      getCountry(sender.countryIso),
-      getCountry(receiver.countryIso),
+      getCountry(senderIso),
+      getCountry(receiverIso),
     ]);
 
     if (!sourceCountry || !destinationCountry) {
@@ -91,7 +96,7 @@ async function settleCrossBorderPayment({ transaction, sender, receiver, amount 
       if (countryCache.size > 0) {
         console.error(
           `Settlement skipped for ${transaction.referenceId}: unrecognised countryIso ` +
-            `(sender ${sender.countryIso}, receiver ${receiver.countryIso}) not present ` +
+            `(sender ${senderIso}, receiver ${receiverIso}) not present ` +
             `in the seeded Country collection.`
         );
       }

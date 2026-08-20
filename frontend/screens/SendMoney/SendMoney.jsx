@@ -49,9 +49,15 @@ function buildSenderProfile(sender) {
     name: randomName()
   };
 }
+// The empty receiver half, before anybody has been searched for. It shows the
+// sender's own country because there is no receiver yet to show — the moment
+// one resolves, resolveSearch replaces this wholesale with THEIR country. The
+// `iso` is carried so every consumer of `bottom` can read the receiver's
+// country off one field instead of re-deriving it from the name.
 function buildLocalReceiverPlaceholder(senderProfile) {
   return {
     country: senderProfile.country,
+    iso: senderProfile.iso,
     flag: senderProfile.flag,
     phone: "",
     id: "",
@@ -195,7 +201,12 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
   useEffect13(() => {
     if (!prefillReceiver) return;
     setBottom({
+      // Already the RECIPIENT's own country by the time it arrives — Scan
+      // resolves the ID against GET /api/users/resolve and reads countryIso
+      // off that response (App.jsx's handleSendToScanned). Taken as given
+      // here rather than re-derived, and never merged with the sender's.
       country: prefillReceiver.country,
+      iso: prefillReceiver.iso,
       flag: prefillReceiver.flag,
       id: prefillReceiver.id || "",
       name: prefillReceiver.name || "Gloobal User",
@@ -538,7 +549,11 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     setSearchError(null);
     if (country) {
       setSearchCountry(country);
-      setBottom((b) => ({ ...b, country: country.name, flag: country.flag }));
+      // openSearch() above has already put the screen back into "dialing", so
+      // this is decorating an empty receiver card with the country whose
+      // number is about to be typed — never overwriting a resolved recipient.
+      // Guarded anyway: see selectSearchCountry.
+      applySearchCountryToPlaceholder(country);
     }
     setMobileBuffer(digits.replace(/\D/g, "").slice(0, maxMobileDigits));
   }
@@ -546,12 +561,26 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     e.stopPropagation();
     setSearchMode((m) => m === "id" ? "mobile" : "id");
   }
+  // The country picker next to the dial pad chooses which country's NUMBER is
+  // being typed. It is not a statement about the recipient, who is unknown
+  // until the lookup returns — so it may only ever paint the empty placeholder
+  // card, and must never reach a receiver the backend has already identified.
+  //
+  // The guard is on the stage rather than on where it is called from: the
+  // picker only renders while dialing today, but a resolved recipient's
+  // country coming from anywhere other than that recipient's own account is
+  // precisely the bug this screen had, and it should not be able to come back
+  // by someone rendering this control somewhere new.
+  function applySearchCountryToPlaceholder(c) {
+    if (searchStage === "found") return;
+    setBottom((b) => ({ ...b, country: c.name, iso: c.iso, flag: c.flag }));
+  }
   function selectSearchCountry(c) {
     setSearchCountry(c);
     if (searchMode === "mobile") setMobileBuffer("");
     setSearchCountryQuery("");
     setCountryDropdownOpen(false);
-    setBottom((b) => ({ ...b, country: c.name, flag: c.flag }));
+    applySearchCountryToPlaceholder(c);
   }
   // Looks the recipient up on the backend instead of inventing one.
   //
@@ -597,19 +626,35 @@ function SendMoneyScreen({ onClose, sender, prefillReceiver = null, history = []
     // the wrong currency and flag entirely, and (via `convert` below) the
     // wrong amount if that ever got sent.
     //
-    // Tries the backend's own countryIso first — the same field
-    // getPlatformUserCountByCountry above groups registrations by, so it's
-    // already load-bearing elsewhere in this file — then falls back to
-    // reading it off their E.164 mobile number with the same dial-code
-    // matching the contact picker uses (matchCountryFromContactNumber),
-    // and only then falls back to `c` for the rare account with neither
-    // signal.
+    // Three sources, strictly in this order:
+    //
+    //   1. user.countryIso — the receiver's registered country, straight off
+    //      GET /api/users/resolve. Authoritative, and now actually correct:
+    //      the server reads it through lib/accountCountry.js, which stopped
+    //      it reporting 'IN' for every account (registration never sent a
+    //      country, so every row held the schema default; see that module).
+    //   2. Their E.164 mobile number, matched on dial code the same way the
+    //      contact picker does — for an account the server could not answer
+    //      for at all.
+    //   3. `c` (effectiveSearchCountry) — the country the SENDER happened to
+    //      be dialling from. Last resort only, and never an override: it
+    //      describes the payer, not the payee, and letting it win is exactly
+    //      what put an Indian flag and ₹ over a US recipient.
+    //
+    // Everything on the receiver half derives from this single value —
+    // the flag, the country name, `currency` (which the amount dial displays
+    // and which `convert` above uses as the FROM currency for the FX
+    // conversion), and through the receipt, the payment summary. Nothing
+    // below re-reads `c` or `top` for any of them, and once searchStage is
+    // "found" nothing else on this screen may write country/iso/flag into
+    // `bottom` (see applySearchCountryToPlaceholder).
     const recipientCountry =
       ALL_COUNTRIES.find((country) => country.iso === user.countryIso) ||
       matchCountryFromContactNumber(user.mobileNumber).country ||
       c;
     setBottom({
       country: recipientCountry.name,
+      iso: recipientCountry.iso,
       flag: recipientCountry.flag,
       // The recipient's CURRENT registered ID, as the backend holds it —
       // not what was typed. Someone paying an ID that has since been

@@ -386,6 +386,14 @@ function GloobalId() {
       // step existed, and a name that is just the number is not a name.
       recipientName: user ? (user.fullName && user.fullName !== user.mobileNumber ? user.fullName : "Gloobal User") : null,
       recipientMobile: (user && user.mobileNumber) || "",
+      // The payee's OWN registered country, straight off the resolve
+      // response — the same field Send Money's dial-in search reads. Without
+      // it, handleSendToScanned below had nothing to describe the recipient
+      // with and fell back to the SENDER's country, so scanning an American
+      // account's QR from India opened Send Money on an Indian flag and ₹.
+      // Null when the ID resolved to nobody, which is the honest answer for
+      // an unregistered code and is what keeps the fallback below a fallback.
+      recipientCountryIso: (user && user.countryIso) || null,
       // As a percent, the unit the rest of the app carries it in — the
       // backend returns a decimal.
       recipientShareRate: (Number(user && user.cashbackRate) || 0) * 100
@@ -402,16 +410,26 @@ function GloobalId() {
   const [sendPrefillReceiver, setSendPrefillReceiver] = useState19(null);
   const handleSendToScanned = () => {
     if (!scanPendingPayment) return;
+    // The country the payee is registered in, from the resolve call the scan
+    // already made. The QR itself carries no country, but the account behind
+    // it does, and that is the only authority on it — a recipient's country
+    // can never be inferred from the payer's.
+    //
+    // The sender's country is the last resort and applies only to a code that
+    // resolved to nobody (an unregistered ID, which cannot be paid for real
+    // anyway). Everything the receiver half of Send Money shows — flag,
+    // country, currency, and through that the FX conversion and the payment
+    // summary — comes off this one value.
+    const scannedCountry =
+      COUNTRY_BY_ISO[String(scanPendingPayment.recipientCountryIso || "").toUpperCase()] || dialCountry;
     setSendPrefillReceiver({
-      // The scan carries no country of its own, so the sender's is the
-      // honest default — the same one the Send Money screen starts on.
-      country: dialCountry.name,
-      flag: dialCountry.flag,
-      iso: dialCountry.iso,
+      country: scannedCountry.name,
+      flag: scannedCountry.flag,
+      iso: scannedCountry.iso,
       id: scanPendingPayment.gloobalId,
       name: scanPendingPayment.recipientName || "Gloobal User",
       mobileNumber: scanPendingPayment.recipientMobile || "",
-      currency: COUNTRY_CURRENCY[dialCountry.iso] || "USD",
+      currency: COUNTRY_CURRENCY[scannedCountry.iso] || "USD",
       shareRate: scanPendingPayment.recipientShareRate || 0,
       // Carried through so Send Money can warn before the person pays,
       // the same way the scan confirmation card already does — an
@@ -679,6 +697,25 @@ function GloobalId() {
   const [pin, setPin] = useState19("");
   const [otp, setOtp] = useState19("123456");
   const [dialCountry, setDialCountry] = useState19(() => TOP_COUNTRIES.find((c) => c.iso === "IN") || TOP_COUNTRIES[0]);
+  // dialCountry starts on India because registration has to start SOMEWHERE
+  // before anyone has said where they are. For a signed-in account that is no
+  // longer a guess — the backend returns countryIso on every response that
+  // carries a user (login, registration, profile) — and leaving the initial
+  // guess in place is what made a British or Kenyan account show an Indian
+  // flag and ₹ on its own dashboard. It also fed Send Money: `sender` (built
+  // from dialCountry, below) is the last-resort fallback for a receiver whose
+  // own country cannot be read, so a wrong sender country propagated into the
+  // receiver card too.
+  //
+  // Applied wherever a real user object arrives. Unknown or unlisted codes are
+  // ignored rather than defaulted over the top, since the existing value is
+  // already the honest "we don't know" answer.
+  const applyAccountCountry = (user) => {
+    const iso = user && String(user.countryIso || "").trim().toUpperCase();
+    if (!iso) return;
+    const match = COUNTRY_BY_ISO[iso];
+    if (match) setDialCountry(match);
+  };
   const [phoneNumber, setPhoneNumber] = useState19("");
   const [showPicker, setShowPicker] = useState19(false);
   const [phoneDialOpen, setPhoneDialOpen] = useState19(false);
@@ -886,6 +923,9 @@ function GloobalId() {
     const restored = GloobalApi.loadSession();
     if (!restored) return;
     setRegisteredUser(restored.user);
+    // The country this account is registered in, as the backend reported it
+    // on the response this session was saved from.
+    applyAccountCountry(restored.user);
     if (restored.user.symbolId) setSecureId(restored.user.symbolId);
     if (restored.phoneNumber) setPhoneNumber(restored.phoneNumber);
     // The ID came from a session this device already authenticated once,
@@ -1295,9 +1335,25 @@ function GloobalId() {
         fullName: documentedName.trim(),
         mobileNumber: fullMobileNumber,
         symbolId: secureId,
+        // The country picked on the phone-code step. POST /api/register-symbol
+        // has always read this out of the body and stored it, but nothing ever
+        // sent it — so the route's `undefined` fallback ran on every single
+        // registration and wrote 'IN'. Every account in the database is
+        // recorded as India-registered as a result, which is the root of the
+        // wrong receiver flag and currency on Send Money: an American payee
+        // resolved to countryIso 'IN' and was drawn with an Indian flag and ₹
+        // on the sender's screen, and the FX conversion used INR as the
+        // receiving currency. Sending it is what makes the stored country
+        // real; server/scripts/backfill-country-iso.mjs repairs the accounts
+        // written before this line existed.
+        countryIso: dialCountry.iso,
         referredBy: referralCode || ""
       });
       setRegisteredUser(result.user);
+      // Normally the same country that was just sent; read back from the
+      // response so the client agrees with whatever the server actually
+      // stored rather than with what it asked for.
+      applyAccountCountry(result.user);
       const newSymbolId = result.user.symbolId || secureId;
       await GloobalApi.setPin(newSymbolId, pin);
       // The photo has no home on the backend (PUT /api/profile takes
@@ -1388,6 +1444,10 @@ function GloobalId() {
       const symbolId = loginIdentifier || (registeredUser && registeredUser.symbolId) || secureId;
       const result = await GloobalApi.login(symbolId, loginAuthPin);
       setRegisteredUser(result.user);
+      // Signing in on a new device: the country picker still holds whatever
+      // was guessed at the phone step, and the account's own country is
+      // authoritative over it.
+      applyAccountCountry(result.user);
       // The backend resolved a mobile number to its account, so this is the
       // first point the Gloobal ID is known on that path.
       if (result.user && result.user.symbolId) setSecureId(result.user.symbolId);

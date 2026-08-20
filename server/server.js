@@ -88,22 +88,40 @@ const toMinorUnit = (value, currencyCode) => {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 };
 
+// Which country an account is registered in, and how a country is read off a
+// mobile number when none was recorded. Shared with lib/settlementEngine.js
+// so the country this API REPORTS for a payee and the country it SETTLES
+// them in can never be two different places — see that module's header for
+// why the stored field alone is not the answer.
+const {
+  DEFAULT_COUNTRY_ISO,
+  deriveCountryIsoFromMobileNumber,
+  accountCountryIso,
+} = require('./lib/accountCountry');
+
 // Resolves whatever country ISO a client claims (the country picked on the
 // registration phone-code screen) against the seeded Country collection —
 // the same source of truth lib/settlementEngine.js reads localCurrency
-// from. Never trusts an unseeded/malformed code: falls back to 'IN', the
-// same default every account already carried before this field was wired
-// up, rather than writing something that later crashes a currency lookup.
+// from. Never trusts an unseeded/malformed code.
+//
+// When the client sends nothing usable, this used to write 'IN' outright.
+// That is what silently made every account Indian for as long as the
+// frontend omitted the field: an unsent country and a country that is not a
+// country were treated identically, and the account's own mobile number —
+// which says where its owner is in plain digits — was never consulted. It is
+// consulted now, and 'IN' is only reached when the number cannot answer
+// either.
 // Cached across requests. Only ever flips false -> true — seeding adds
 // documents and nothing removes them — so a stale `true` cannot happen, and a
 // stale `false` self-corrects on the next lookup that misses.
 let countryCollectionSeeded = null;
 
-async function resolveRegistrationCountryIso(rawIso) {
+async function resolveRegistrationCountryIso(rawIso, mobileNumber) {
+  const fallbackIso = deriveCountryIsoFromMobileNumber(mobileNumber) || DEFAULT_COUNTRY_ISO;
   const candidate = String(rawIso || '').trim().toUpperCase();
   // Was `candidate.length !== 2`, which accepted any two characters. A real
   // ISO 3166-1 alpha-2 code is two letters.
-  if (!/^[A-Z]{2}$/.test(candidate)) return 'IN';
+  if (!/^[A-Z]{2}$/.test(candidate)) return fallbackIso;
 
   const match = await Country.findOne({ iso: candidate }).select('iso').lean();
   if (match) return match.iso;
@@ -123,7 +141,7 @@ async function resolveRegistrationCountryIso(rawIso) {
   if (countryCollectionSeeded !== true) {
     countryCollectionSeeded = (await Country.estimatedDocumentCount()) > 0;
   }
-  if (countryCollectionSeeded) return 'IN';
+  if (countryCollectionSeeded) return fallbackIso;
 
   console.warn(
     `[country] countries collection is empty — accepting "${candidate}" without validation. ` +
@@ -211,9 +229,28 @@ mongoose.connect(mongoURI)
 const normalizeText = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
+// Puts a submitted number into E.164, filling in India's calling code for the
+// bare national forms this app has always accepted from Indian users.
+//
+// The '+' guard is load-bearing. Without it, the 10-digit rule below fires on
+// any input whose digits happen to total ten — INCLUDING numbers that already
+// carried their own country code. Seven of the 194 countries the registration
+// picker offers have an E.164 form exactly ten digits long: Belgium (+32),
+// Sweden (+46), Norway (+47), Denmark (+45), Singapore (+65), New Zealand
+// (+64) and Iceland (+354). A Dane registering +4512345678 had it stored as
+// +914512345678 — a different country's calling code stapled onto their real
+// number. That corrupts the account's number outright, and with it the only
+// remaining signal of where its owner is (see lib/accountCountry.js), so a
+// Danish payee resolved as Indian no matter what else was fixed.
+//
+// A value that already starts with '+' is by definition already carrying a
+// country code and is never a bare Indian national number, so it is left
+// exactly as submitted.
 const normalizeMobileNumber = (value) => {
   const raw = String(value || '').trim();
   const digits = raw.replace(/\D/g, '');
+
+  if (raw.startsWith('+')) return raw;
 
   if (digits.length === 10) return `+91${digits}`;
   if (digits.length === 11 && digits.startsWith('0')) return `+91${digits.slice(1)}`;
@@ -311,9 +348,15 @@ const publicUserPayload = async (user) => {
     // which is why a Kenyan or British account showed an Indian flag on its
     // own dashboard. Every response that carries a user goes through this
     // helper, so returning it here covers login, profile and registration
-    // alike. Defaulted rather than left undefined: documents written before
-    // the field existed have no value, and the schema's own default is 'IN'.
-    countryIso: user.countryIso || 'IN',
+    // alike.
+    //
+    // Read through accountCountryIso rather than straight off the document:
+    // every account registered before the frontend started sending a country
+    // carries the schema's bare 'IN' default whether or not its owner is in
+    // India, so the stored value alone would tell a US account it is Indian —
+    // and this response is what the client sets its OWN flag and currency
+    // from.
+    countryIso: accountCountryIso(user),
     referredBy: user.referredBy || null,
     referralCount: user.referralCount || 0,
     cashbackRate: Number(user.cashbackRate) || 0,
@@ -389,20 +432,78 @@ const findVerifiedPinResetOtp = async (mobileNumber) => {
 
 const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Is this a real deployment, as opposed to somebody's laptop or a test run?
+//
+// NODE_ENV alone is not enough to answer that here: Render does NOT set
+// NODE_ENV for a Node service unless you add it yourself, so keying off it
+// would have left the live API permanently classified as "development" — the
+// exact reading that let the boot-time random key below survive in production
+// for as long as it did. RENDER=true is injected into every Render service's
+// environment by the platform, so the two together cover both the conventional
+// signal and the one this app is actually deployed behind.
+const IS_PRODUCTION_DEPLOY =
+  process.env.NODE_ENV === 'production' || String(process.env.RENDER || '') === 'true';
+
+// The bearer-token signing key.
+//
 // A missing secret must never fall back to a constant: a signing key that ships
 // in the source signs tokens anybody can forge, which is indistinguishable from
-// having no authentication at all. A random per-boot key is the safe failure —
-// it works, and its only cost is that a restart invalidates existing tokens and
-// everyone signs in again. On Render's free tier the service sleeps often, so
-// that cost is real and the warning below is worth acting on.
-const AUTH_TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET || crypto.randomBytes(48).toString('hex');
+// having no authentication at all.
+//
+// It also must not silently fall back to a random per-boot key in production,
+// which is what this did. That reads like a safe failure — it works, and the
+// only cost is that a restart signs everybody out — but on Render's free tier
+// the service sleeps whenever it is idle, so "a restart" is *every few
+// minutes of quiet*. The practical effect was that a person who signed in,
+// put their phone down, and came back to send money was met with a 401 and
+// "sign in to continue" on a session that was never actually invalid. A
+// warning in a log nobody reads is not a control; refusing to boot is.
+//
+// So: production requires the secret and exits if it is absent. Local and
+// test runs keep the old per-boot key, where a restart signing you out is
+// both expected and harmless.
+const AUTH_TOKEN_SECRET_MIN_LENGTH = 32;
 
-if (!process.env.AUTH_TOKEN_SECRET) {
+const resolveAuthTokenSecret = () => {
+  const configured = String(process.env.AUTH_TOKEN_SECRET || '').trim();
+
+  if (configured) {
+    // Length-checked rather than trusted: a one-word secret is a forgeable
+    // HMAC key, and failing loudly at boot is far cheaper than discovering it
+    // from the outside. Generate one with:
+    //   node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+    if (configured.length < AUTH_TOKEN_SECRET_MIN_LENGTH) {
+      console.error(
+        `FATAL: AUTH_TOKEN_SECRET is only ${configured.length} characters. ` +
+        `It must be at least ${AUTH_TOKEN_SECRET_MIN_LENGTH}. Generate one with: ` +
+        'node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+      );
+      process.exit(1);
+    }
+    return configured;
+  }
+
+  if (IS_PRODUCTION_DEPLOY) {
+    console.error(
+      'FATAL: AUTH_TOKEN_SECRET is not set. This is a production deploy, and ' +
+      'signing tokens with a key generated at boot would invalidate every ' +
+      'existing session on every restart — which on Render\'s free tier means ' +
+      'every cold start. Set AUTH_TOKEN_SECRET in the service environment ' +
+      '(Render dashboard -> Environment) to a stable random value. Generate ' +
+      'one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+    );
+    process.exit(1);
+  }
+
   console.warn(
-    'WARNING: AUTH_TOKEN_SECRET is not set. Using a random key generated at boot — ' +
-    'every restart will sign everybody out. Set it in the environment.'
+    'AUTH_TOKEN_SECRET is not set. Using a random key generated at boot — ' +
+    'restarting will sign everybody out. Fine locally; production refuses to ' +
+    'start without it.'
   );
-}
+  return crypto.randomBytes(48).toString('hex');
+};
+
+const AUTH_TOKEN_SECRET = resolveAuthTokenSecret();
 
 const base64url = (input) => Buffer.from(input).toString('base64url');
 
@@ -1050,7 +1151,11 @@ app.post('/api/register-symbol', registerLimit, async (req, res) => {
     // Country table, never trusted raw, since this is what decides which
     // currency this account's balance — and every cashback it earns — is
     // actually denominated in.
-    const resolvedCountryIso = await resolveRegistrationCountryIso(countryIso);
+    // The number is passed alongside so an older client that sends no country
+    // at all still lands on the right one instead of silently becoming Indian —
+    // which is exactly what every registration did until the frontend started
+    // sending this field.
+    const resolvedCountryIso = await resolveRegistrationCountryIso(countryIso, cleanMobileNumber);
 
     if (!cleanMobileNumber || !cleanSymbolId) {
       return res.status(400).json({
@@ -2521,7 +2626,16 @@ function cleanResolvedTransactionUserPayload(resolved) {
     // ₹ on both halves of the screen. A recipient's country cannot be derived
     // from the payer's — it can only be read off the recipient's own account,
     // which is here.
-    countryIso: resolved.user.countryIso || 'IN',
+    //
+    // accountCountryIso, not the raw field: returning the raw field fixed
+    // nothing in practice, because the raw field is 'IN' on every account
+    // that existed before registration began sending a country. The payment
+    // screen dutifully showed the country this route reported, and this route
+    // reported India for everybody — so an American payee still resolved with
+    // an Indian flag and INR, and the FX conversion still used the wrong
+    // receiving currency. See accountCountryIso for how a real 'IN' is told
+    // apart from the default standing in for one.
+    countryIso: accountCountryIso(resolved.user),
     matchedBy: resolved.matchedBy,
     normalizedIdentifier: resolved.normalizedIdentifier,
   };
@@ -3558,9 +3672,16 @@ app.post('/api/transactions/send', writeLimit, requireAuth, requireSelf('senderS
     // actually move. A same-currency pair (still the overwhelming majority
     // of accounts today) resolves fxRate to exactly 1, so nothing below
     // changes behaviour for them at all.
+    //
+    // Both sides go through accountCountryIso for the same reason the resolve
+    // route does: an account written before registration sent a country holds
+    // the bare 'IN' default whatever its owner's number says, and reading the
+    // field raw here would settle a US payee in INR while the payer's screen —
+    // which asks the resolve route — correctly showed USD. The two must agree,
+    // so they read the country the same way.
     const [senderCountry, receiverCountry] = await Promise.all([
-      Country.findOne({ iso: sender.countryIso }).select('localCurrency').lean(),
-      Country.findOne({ iso: receiver.countryIso }).select('localCurrency').lean(),
+      Country.findOne({ iso: accountCountryIso(sender) }).select('localCurrency').lean(),
+      Country.findOne({ iso: accountCountryIso(receiver) }).select('localCurrency').lean(),
     ]);
     const senderCurrency = senderCountry?.localCurrency || 'INR';
     const destinationCurrency = receiverCountry?.localCurrency || 'INR';
@@ -4958,7 +5079,7 @@ const floorToMinorUnit = (value, currencyCode) => {
 // always the account's own Country.localCurrency, never a client-supplied
 // code.
 async function resolveOwnCurrency(user) {
-  const country = await Country.findOne({ iso: user.countryIso }).select('localCurrency').lean();
+  const country = await Country.findOne({ iso: accountCountryIso(user) }).select('localCurrency').lean();
   return country?.localCurrency || 'INR';
 }
 
@@ -5546,7 +5667,7 @@ app.post('/api/geu/redeem', writeLimit, requireAuth, requireSelf('symbolId'), as
           // way a payment's source side does — the value already existed as
           // GEU backing (GeuSupply.capitalBackingReferenceInr) before this
           // redemption started.
-          pool = await CountryCurrencyPool.loadOrCreate(user.countryIso, GEU_REFERENCE_CURRENCY, destinationCurrency, session);
+          pool = await CountryCurrencyPool.loadOrCreate(accountCountryIso(user), GEU_REFERENCE_CURRENCY, destinationCurrency, session);
 
           const releasedPool = await CountryCurrencyPool.findOneAndUpdate(
             { _id: pool._id, availableBalance: { $gte: localCurrencyAmount } },
