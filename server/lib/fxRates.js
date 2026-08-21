@@ -1,4 +1,4 @@
-// Backend/lib/fxRates.js
+// server/lib/fxRates.js
 //
 // Live exchange rates for the settlement engine, backed by
 // open.er-api.com — chosen specifically because it needs no API key and no

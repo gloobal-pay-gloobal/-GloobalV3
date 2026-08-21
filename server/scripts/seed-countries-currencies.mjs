@@ -28,7 +28,7 @@ const require = createRequire(join(BACKEND, "server.js"));
 require("dotenv").config({ path: join(BACKEND, ".env"), quiet: true });
 
 if (!process.env.MONGO_URI) {
-  console.error("MONGO_URI is not set — this script needs Backend/.env.");
+  console.error("MONGO_URI is not set — this script needs server/.env.");
   process.exit(1);
 }
 

@@ -1,4 +1,4 @@
-// Backend/data/countryCurrencyMap.js
+// server/data/countryCurrencyMap.js
 //
 // ISO 3166-1 alpha-2 country code -> ISO 4217 currency code, for every
 // country in the frontend's registration picker (Frontend's

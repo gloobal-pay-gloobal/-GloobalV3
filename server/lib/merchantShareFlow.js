@@ -1,4 +1,4 @@
-// Backend/lib/merchantShareFlow.js
+// server/lib/merchantShareFlow.js
 //
 // Stage 4: turns a completed payment into the diagrams' "1 vs 2 transaction
 // IDs, 1 vs 4 receipts" structure.

@@ -1,4 +1,4 @@
-// Backend/lib/accountCountry.js
+// server/lib/accountCountry.js
 //
 // One answer to "which country is this account registered in", shared by
 // every route and service that needs it.

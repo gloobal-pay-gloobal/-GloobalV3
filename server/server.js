@@ -2205,7 +2205,11 @@ async function getWebAuthnServer() {
 }
 
 function getWebAuthnConfig(req) {
-  const requestOrigin = req.get('origin') || 'https://gloobal.netlify.app';
+  // Fallback only for a caller that sends no Origin header; every real
+  // WebAuthn call is a browser request and always carries one. It named
+  // gloobal.netlify.app, a site that no longer exists, which would have
+  // derived an rpID for a domain nobody can serve.
+  const requestOrigin = req.get('origin') || 'https://gloobalv3.netlify.app';
   const parsedOrigin = new URL(requestOrigin);
 
   return {

@@ -1,4 +1,4 @@
-// Backend/lib/settlementEngine.js
+// server/lib/settlementEngine.js
 //
 // Stage 3 of the multi-currency architecture (schema was Stage 1, live FX
 // was Stage 2): turns a completed person-to-person Transaction into a real

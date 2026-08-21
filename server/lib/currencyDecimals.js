@@ -1,4 +1,4 @@
-// Backend/lib/currencyDecimals.js
+// server/lib/currencyDecimals.js
 //
 // Bug fix (audit finding, see docs/audit-2026-08.md): Currency.decimals
 // exists specifically "so an amount is never displayed or stored with more
