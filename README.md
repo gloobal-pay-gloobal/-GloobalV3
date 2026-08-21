@@ -1,5 +1,48 @@
 # Gloobal — Financial Platform
 
+## Repository and deployments
+
+`gloobal-pay-gloobal/GloobalV3` is the **single source of truth**. One
+repository, one branch, two deploy targets — no other repository or
+deployment source is part of normal development.
+
+| | |
+|---|---|
+| Local workspace | `D:\gloobalv3` |
+| Git | `https://github.com/gloobal-pay-gloobal/GloobalV3.git` |
+| Branch | `main` |
+| Frontend | Netlify — https://gloobalv3.netlify.app |
+| Backend | Render — https://gloobal-pay.onrender.com (root `server`, start `node server.js`) |
+| Database | MongoDB Atlas |
+
+### Workflow
+
+```
+edit in D:\gloobalv3
+        ↓
+node build_app.mjs        # after any change under frontend/ or backend/
+        ↓
+test  (see Diagnostics and financial-principles-tests/)
+        ↓
+git add → git commit → git push origin main
+        ↓
+Netlify deploys the frontend   +   Render deploys the API
+```
+
+Two caveats on that last step:
+
+- **Render auto-deploy is currently broken.** The GitHub webhook went stale
+  when the repository was renamed, so a change under `server/` needs a
+  manual deploy from the Render dashboard until it is reconnected. Netlify
+  is unaffected. See `docs/deployment/README.md`.
+- Render only rebuilds when files under `server/` change, so a docs- or
+  frontend-only commit correctly leaves it on an older commit.
+
+Older Gloobal repositories elsewhere on disk (`D:\Desktop\Gloobal`,
+`D:\Gloobal project`, `D:\GloobalApp`, `D:\gloobal-new version`) and the
+GitHub repo `gloobal-pay-gloobal/Gloobal` are **legacy, reference only**.
+Nothing live builds from them. See `docs/handoffs/legacy-repositories.md`.
+
 ## Project Structure
 
 This project is organized into two main layers:
@@ -160,7 +203,7 @@ The client lives in `backend/services/api/`:
 Point it elsewhere with `VITE_API_URL` — see `.env.example`.
 
 **The browser never connects to MongoDB.** There is no driver and no
-connection string in this bundle; `MONGO_URI` stays in `Backend/.env` on
+connection string in this bundle; `MONGO_URI` stays in `server/.env` on
 the server. Never put a secret behind a `VITE_` variable — those are
 inlined into the public bundle.
 

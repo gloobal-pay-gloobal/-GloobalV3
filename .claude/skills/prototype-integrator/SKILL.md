@@ -22,11 +22,12 @@ Act as a senior full-stack developer reviewing a junior's prototype: understand 
 
 | Folder | Role |
 |---|---|
-| `D:\Gloobal project` | Sandbox. Branch `experimental`, push URLs set to `no_push`. **All integration happens here.** |
-| `D:\Desktop\Gloobal` | Main repo. Do not edit during integration. |
+| `D:\gloobalv3` | **The only active repository.** Integrate on a branch here, never on `main`. |
+| `D:\Desktop\Gloobal`, `D:\Gloobal project`, `D:\GloobalApp` | Superseded repositories. Reference only — never edit, and never treat as the integration target. |
 
-Print the current folder before writing anything. If it is the main repo, stop and ask.
-The sandbox path contains a space — quote it: `cd "D:\Gloobal project"`.
+Print the current folder before writing anything. If it is anything other than
+`D:\gloobalv3`, stop and ask. Work on a feature branch and leave `main` clean;
+`git status` must be clean before you start.
 
 ---
 
@@ -173,13 +174,13 @@ Discarded from prototype: [brief list]
 Existing features verified unchanged: [list]
 ```
 
-Promoting the work to `D:\Desktop\Gloobal`, or pushing to GitHub, is a separate step requiring explicit approval. This skill never does it.
+Merging the branch into `main`, or pushing to GitHub, is a separate step requiring explicit approval. This skill never does it.
 
 ---
 
 ## Hard rules
 
-- Never run the sandbox backend against the live database. `Backend\.env` and `report-mailer\.env` still hold production credentials for `https://gloobal-pay.onrender.com`.
+- Never run the sandbox backend against the live database. `server\.env` and `tools\email\report-mailer\.env` still hold production credentials for `https://gloobal-pay.onrender.com`.
 - Never delete an existing real screen to make a prototype screen fit. Report the collision and let the user choose.
 - Do not copy the prototype's `node_modules`, lockfile, or `.env`.
 

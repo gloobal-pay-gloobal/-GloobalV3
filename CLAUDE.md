@@ -8,8 +8,25 @@ Guidance for Claude Code working in this repository.
 |---|---|
 | Repo root | `D:\gloobalv3` |
 | Remote | `https://github.com/gloobal-pay-gloobal/GloobalV3.git` |
-| Live frontend | https://gloobalv3.netlify.app |
-| Live API | https://gloobal-pay.onrender.com |
+| Deploy branch | `main` |
+| Live frontend | https://gloobalv3.netlify.app (Netlify) |
+| Live API | https://gloobal-pay.onrender.com (Render, root `server`) |
+
+**GloobalV3 is the only active repository.** Netlify and Render both build
+from `GloobalV3` / `main` — no other repo, branch, or deployment source is
+part of normal development:
+
+```
+edit in D:\gloobalv3  →  git commit  →  git push origin main
+                                              │
+                   ┌─────────────────────┴─────────────────────┐
+                   ▼                                            ▼
+         Netlify → frontend                        Render → API (server/)
+```
+
+Caveat: the Render half of that is **not currently automatic** — the
+GitHub webhook is stale, so a change under `server/` needs a manual deploy
+until it is reconnected. See `docs/deployment/README.md`.
 
 `D:\gloobalv3` is the single active workspace. Every other Gloobal folder
 on this machine — including `D:\Desktop\Gloobal`, `D:\Gloobal project`,
@@ -184,9 +201,19 @@ Two independent deploy targets, from the same repo. See
   `node ../build_app.mjs ..`, so the repo root has to stay in the deploy
   context — that relative path is why the app folder cannot move. Live at
   https://gloobalv3.netlify.app.
-- **Render runs `server/`.** Root directory `server`, start command
-  `node server.js`. `server/server.js` must remain at exactly that path;
-  moving or renaming it breaks the deployment. Live at
+- **Render runs `server/`.** Root directory `server`, build `npm install`,
+  start `node server.js`. `server/server.js` must remain at exactly that
+  path; moving or renaming it breaks the deployment. Live at
   https://gloobal-pay.onrender.com.
 
 Neither path may move.
+
+**Render auto-deploy is broken.** The service is configured correctly, but
+GitHub is not delivering the webhook — no deploy has been triggered by a
+push since the repository was renamed. After changing anything under
+`server/`, trigger a manual deploy from the Render dashboard, or the live
+API will not have your change. Netlify auto-deploys normally. Evidence and
+the reconnect steps are in `docs/deployment/README.md`.
+
+Render only rebuilds when files under `server/` change, so a docs- or
+frontend-only commit leaving Render on an older commit is correct.

@@ -61,17 +61,56 @@ Keep the value stable for the life of the deployment. Changing it signs
 everyone out once, exactly as a restart used to. It lives only in the
 Render dashboard under Environment — never in the repository.
 
-### Auto-deploy is currently unreliable
+### Auto-deploy is broken — Render needs a manual deploy
 
-The service has `autoDeploy: yes` on `commit`, but a push to `main` on
-2026-08-20 did not trigger a deploy and had to be started by hand. The
-GitHub repository was renamed at some point (`-GloobalV3` → `GloobalV3`)
-and the webhook appears to have been left pointing at the old name; the
-push showed a `remote: This repository moved` redirect.
+The service is configured correctly (`autoDeploy: yes`, trigger `commit`,
+repo `GloobalV3`, branch `main`). GitHub is simply not delivering the
+webhook, so Render never learns that `main` moved.
 
-Until that is fixed in the Render dashboard (Settings → Build & Deploy →
-reconnect the repository), assume a push may need a manual deploy. The
-local remote has been repointed to the canonical URL.
+The deploy history proves it. A webhook-driven deploy is recorded with
+trigger `new_commit`:
+
+| Date | Trigger | Repo the service pointed at |
+|---|---|---|
+| 2026-08-13 → 2026-08-18 | `new_commit` × 11 | `gloobal-pay-gloobal/Gloobal` (old) |
+| 2026-08-19 17:15 | `service_updated` | repointed to `GloobalV3` |
+| 2026-08-19 → 2026-08-21 | `manual`, `api`, `service_updated` only | `GloobalV3` |
+
+Not one `new_commit` deploy has fired since the service was repointed.
+This is not Render's monorepo path filter (`rootDir: server`) being
+selective: commit `7d7a948` **created the entire `server/` tree** and
+`a07de64` modified it, and neither produced a `new_commit` deploy.
+
+The cause is the repository rename (`-GloobalV3` → `GloobalV3`) leaving a
+stale webhook — pushes showed a `remote: This repository moved` redirect.
+
+**Fix it in the dashboards** (there is no API for this):
+
+1. GitHub → `gloobal-pay-gloobal/GloobalV3` → Settings → Webhooks.
+   Delete any hook whose payload URL contains `api.render.com` and still
+   names the old repo, or that shows red/failed recent deliveries.
+2. Render → **Gloobal Pay** → Settings → Build & Deploy → Repository →
+   **Disconnect**, then reconnect to
+   `https://github.com/gloobal-pay-gloobal/GloobalV3`, branch `main`,
+   root directory `server`. Reconnecting re-creates the webhook.
+3. Confirm: push a commit that touches `server/` and check that a deploy
+   appears with trigger `new_commit`, not `manual`.
+
+Until that is done, **a change under `server/` needs a manual deploy**
+(Render dashboard → Manual Deploy → Deploy latest commit). Netlify is
+unaffected and deploys automatically.
+
+Note that Render only rebuilds when files under `rootDir` (`server/`)
+change, so a commit touching only docs or frontend leaving Render on an
+older commit is correct behaviour, not the bug above.
+
+## Legacy — not part of this deployment
+
+| Thing | State |
+|---|---|
+| Render service **Gloobal** (`srv-d8g26m19rddc73b11150`) | Still running at `https://gloobal.onrender.com`, deploying from the old `gloobal-pay-gloobal/Gloobal` repo. **Nothing points at it.** Left up deliberately until the single-repo setup is proven; delete it then. |
+| GitHub `gloobal-pay-gloobal/Gloobal` | Legacy source of the above. Not the deployment source for anything live. |
+| `gloobal.netlify.app`, `gloobalapp.netlify.app`, `gloobal-v2.netlify.app` | Deleted. Any reference to them in active code is a bug. |
 
 ## Verifying a deploy
 

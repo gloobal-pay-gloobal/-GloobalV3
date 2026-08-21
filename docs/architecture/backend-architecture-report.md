@@ -30,17 +30,22 @@ Two things are worth stating up front because they shape everything else:
 
 ## 1. Topology
 
-Three independently deployed pieces, in two git repositories.
+Three independently deployed pieces, all from **one** git repository:
+`gloobal-pay-gloobal/GloobalV3`, branch `main`.
 
-| Piece | Runs on | Repository | Deploys |
+| Piece | Runs on | Source in repo | Deploys |
 |---|---|---|---|
-| Frontend (React PWA) | Netlify — `gloobalv3.netlify.app` | `gloobal-pay-gloobal/-GloobalV3` | Manual / CLI |
-| API (Express 5) | Render — `gloobal-pay.onrender.com` | `gloobal-pay-gloobal/Gloobal` | Auto on push to `main` |
+| Frontend (React PWA) | Netlify — `gloobalv3.netlify.app` | `gloobal-essentials-preview/` (+ `frontend/`, `backend/`) | Auto on push to `main` |
+| API (Express 5) | Render — `gloobal-pay.onrender.com` | `server/` | On push to `main` — see the auto-deploy caveat in `docs/deployment/README.md` |
 | Database | MongoDB Atlas — `gloobal_db` | — | Managed |
 
-Because the two code repositories deploy separately, **order matters**: a
-frontend release that calls a route the API has not shipped yet will fail in
-production. The Gloobal Coin rollout was sequenced backend-first for this reason.
+The frontend and the API used to live in separate repositories and were
+bridged by hand. They no longer are: one push updates both.
+
+**Order still matters**, because the two targets build independently from the
+same commit. A frontend release that calls a route the API has not shipped yet
+will fail in production, and Netlify is currently the faster of the two. The
+Gloobal Coin rollout was sequenced backend-first for this reason.
 
 ---
 
