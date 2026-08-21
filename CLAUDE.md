@@ -11,11 +11,17 @@ Guidance for Claude Code working in this repository.
 | Live frontend | https://gloobalv3.netlify.app |
 | Live API | https://gloobal-pay.onrender.com |
 
-This is the single active workspace. Other Gloobal folders on this machine
-(`D:\Desktop\Gloobal`, `D:\Gloobal project`, `D:\GloobalApp`) are older
-repositories kept for reference only — see
-`docs/handoffs/legacy-repositories.md`. Do not edit them, and do not copy
-from them without checking whether this repo is already ahead.
+`D:\gloobalv3` is the single active workspace. Every other Gloobal folder
+on this machine — including `D:\Desktop\Gloobal`, `D:\Gloobal project`,
+`D:\GloobalApp`, `D:\gloobal-new version` and
+`D:\_stale-server-backup-20260820` — is an older repository or backup kept
+for **reference only**; see `docs/handoffs/legacy-repositories.md`.
+
+Never edit, move, or delete anything outside `D:\gloobalv3` automatically.
+Read from them if you must, but do not copy anything across without first
+checking whether this repo is already ahead. Their layout and conventions
+are obsolete — this file is the only authority on how the project is
+structured.
 
 ## Workflow rules
 
@@ -30,16 +36,37 @@ from them without checking whether this repo is already ahead.
 ## Layout
 
 ```
-frontend/                    React source (concatenation build)
-backend/                     Local domain simulation, also concatenated
-server/                      Real Express + MongoDB API, deployed to Render
-gloobal-essentials-preview/  Vite wrapper; consumes the generated bundle
-financial-principles-tests/  Domain/financial test suite
-build_app.mjs                Concatenates backend/ + frontend/ into the bundle
-tools/                       Developer tooling (not shipped)
-docs/                        Architecture, deployment, operations, handoffs
-archive/                     Reference copies of superseded code
+D:\gloobalv3\
+├── .claude/                    Claude Code settings, skills, local tooling
+├── frontend/                   React source (concatenation build)
+├── backend/                    Browser-side domain simulation, also concatenated
+├── server/                     Real Express + MongoDB API, deployed to Render
+├── gloobal-essentials-preview/ Vite project; consumes the generated bundle
+├── financial-principles-tests/ Domain/financial test suite
+├── tools/                      Developer tooling — not shipped, not bundled
+│   ├── frontend/               Frontend diagnostics (scan/probe scripts)
+│   ├── backend/                Live API contract checks
+│   └── email/                  Email + report mailer utilities
+├── docs/                       Architecture, deployment, operations, handoffs
+├── archive/                    Reference copies of superseded code
+│   └── legacy/                 Historical material — read-only
+├── build_app.mjs               Concatenates backend/ + frontend/ into the bundle
+├── CLAUDE.md
+└── README.md
 ```
+
+Notes on that tree:
+
+- **Developer diagnostics live under `tools/`** — `tools/frontend/` for the
+  bundle and screens, `tools/backend/` for the live API. Nothing under
+  `tools/` is shipped or bundled into the app.
+- **Email utilities live under `tools/email/`** (`mailer.py`, `fetch_mail.py`,
+  `send.bat`, and the Node `report-mailer/`). They read credentials at run
+  time from `tools/email/secret.txt` and `tools/email/report-mailer/.env`,
+  both gitignored; only the `.example` files are committed.
+- **Historical material lives under `archive/legacy/`** — superseded docs and
+  the v1 frontend. It exists to be read, not built, imported, or edited.
+  Nothing in the live app may depend on it.
 
 ### `backend/` and `server/` are different systems
 
@@ -148,6 +175,18 @@ server.
 
 ## Deployment
 
-See `docs/deployment/README.md`. In short: Netlify builds from
-`gloobal-essentials-preview/`, Render runs `node server.js` with root
-directory `server`. Neither path may move.
+Two independent deploy targets, from the same repo. See
+`docs/deployment/README.md` for the full detail.
+
+- **Netlify deploys the current Vite preview project.** `netlify.toml` sets
+  `base = "gloobal-essentials-preview"` and publishes
+  `gloobal-essentials-preview/dist`. Its `prebuild` hook runs
+  `node ../build_app.mjs ..`, so the repo root has to stay in the deploy
+  context — that relative path is why the app folder cannot move. Live at
+  https://gloobalv3.netlify.app.
+- **Render runs `server/`.** Root directory `server`, start command
+  `node server.js`. `server/server.js` must remain at exactly that path;
+  moving or renaming it breaks the deployment. Live at
+  https://gloobal-pay.onrender.com.
+
+Neither path may move.
